@@ -354,7 +354,225 @@ CPI Profile:
 
 ---
 
+### Epic 9: Tax Funding
+
+#### US-9.1: Set default tax funding account
+**As a** user  
+**I want to** specify which account pays my tax  
+**So that** tax actually reduces my available funds
+
+**Acceptance Criteria:**
+- [ ] Can select a default tax funding account per person
+- [ ] Tax amount is deducted from this account each year
+- [ ] If account balance goes negative, show warning
+- [ ] Tax payment appears as outflow in the funding account
+
+---
+
+#### US-9.2: Verify tax reduces account balance
+**As a** user  
+**I want to** see that calculated tax is actually paid  
+**So that** my net worth reflects real after-tax position
+
+**Acceptance Criteria:**
+- [ ] Tax shown in Calculated section matches deduction from funding account
+- [ ] Net worth calculation accounts for tax paid
+- [ ] Funding account balance is reduced by tax amount
+
+**Test Case:**
+```
+Given: Salary $100,000, Cash account $50,000, tax funding = Cash
+When: Year 1 tax calculated as $22,000
+Then: Cash account balance reduced by $22,000
+And: Net worth reflects the tax payment
+```
+
+---
+
 ## Phase 2: Multi-Period & Scenarios (Future)
+
+### Epic 10: Capital Gains Tax
+
+#### US-10.1: Trigger CGT on asset sale
+**As a** user  
+**I want to** pay capital gains tax when I sell an asset  
+**So that** my forecast reflects the true sale proceeds
+
+**Acceptance Criteria:**
+- [ ] Can set account end behavior to "sell"
+- [ ] CGT calculated as: (sale price - cost base)
+- [ ] CGT amount added to assessable income
+- [ ] Tax on CGT paid from tax funding account
+
+**Test Case:**
+```
+Given: Shares account with cost base $50,000
+And: Current value $100,000, end year 2030, behavior = sell
+When: Shares sold in 2030
+Then: Capital gain = $100,000 - $50,000 = $50,000
+And: $50,000 added to assessable income for 2030
+```
+
+---
+
+#### US-10.2: Apply 50% CGT discount for long-term holdings
+**As a** user  
+**I want to** receive the CGT discount for assets held over 12 months  
+**So that** my tax is calculated correctly
+
+**Acceptance Criteria:**
+- [ ] Discount applies if (sale year - acquisition year) >= 1
+- [ ] Only 50% of capital gain is assessable
+- [ ] UI shows both gross gain and discounted gain
+
+**Test Case:**
+```
+Given: Shares bought in 2025, cost base $50,000
+And: Sold in 2030 for $100,000
+When: Holding period = 5 years (>12 months)
+Then: Gross capital gain = $50,000
+And: Discounted gain = $25,000 (50%)
+And: $25,000 added to assessable income
+```
+
+---
+
+#### US-10.3: No CGT discount for short-term holdings
+**As a** user  
+**I want to** pay full CGT on assets held less than 12 months  
+**So that** short-term gains are taxed correctly
+
+**Test Case:**
+```
+Given: Shares bought in 2029, cost base $50,000
+And: Sold in 2029 for $100,000
+When: Holding period < 12 months
+Then: No discount applied
+And: Full $50,000 added to assessable income
+```
+
+---
+
+### Epic 11: Tax-Free Income
+
+#### US-11.1: Pension income not taxed
+**As a** user  
+**I want to** receive pension phase super income tax-free  
+**So that** my retirement income is not reduced by tax
+
+**Acceptance Criteria:**
+- [ ] Can mark account as "tax-free (pension)"
+- [ ] Income from this account excluded from assessable income
+- [ ] Tax calculation ignores pension income
+- [ ] Pension income still appears in Total Income
+
+**Test Case:**
+```
+Given: Salary $50,000 (taxable), Pension income $40,000 (tax-free)
+When: Tax calculated for the year
+Then: Tax based only on $50,000 salary
+And: Total income shows $90,000
+And: Tax calculated on $50,000 (not $90,000)
+```
+
+---
+
+### Epic 12: Superannuation Contributions
+
+#### US-12.1: Employer super contributions count toward cap
+**As a** user  
+**I want to** track employer super contributions against my cap  
+**So that** I know how much personal contribution room I have
+
+**Acceptance Criteria:**
+- [ ] Employer contributions counted toward concessional cap
+- [ ] Current cap shown (e.g., $30,000)
+- [ ] Remaining cap = $30,000 - employer contributions
+- [ ] Contribution tracking visible in Tax detail panel
+
+**Test Case:**
+```
+Given: Concessional cap = $30,000
+And: Employer contributes $12,000 (11.5% of $104,000 salary)
+When: Year ends
+Then: Used cap = $12,000
+And: Available cap = $18,000
+```
+
+---
+
+#### US-12.2: Personal deductible contributions reduce taxable income
+**As a** user  
+**I want to** claim a tax deduction for personal super contributions  
+**So that** I reduce my tax bill
+
+**Acceptance Criteria:**
+- [ ] Personal contributions (up to cap) deductible
+- [ ] Deduction reduces assessable income
+- [ ] Tax saving = contribution × marginal rate
+- [ ] Contribution must be within cap to be deductible
+
+**Test Case:**
+```
+Given: Salary $120,000, marginal rate 32.5%
+And: Personal super contribution $10,000 (within cap)
+When: Tax calculated
+Then: Taxable income = $120,000 - $10,000 = $110,000
+And: Tax saving = $10,000 × 32.5% = $3,250
+```
+
+---
+
+#### US-12.3: Carry forward unused concessional cap
+**As a** user  
+**I want to** use unused cap from previous years  
+**So that** I can make larger contributions in high-income years
+
+**Acceptance Criteria:**
+- [ ] Track unused cap for up to 5 years
+- [ ] Carry-forward available if super balance < $500,000 (simplified: always available for MVP)
+- [ ] Available cap = current year cap + sum of unused caps from prior 5 years
+- [ ] Oldest unused cap expires after 5 years
+
+**Test Case:**
+```
+Given: Yearly cap = $30,000
+And: Year 1: contributed $20,000 (unused $10,000)
+And: Year 2: contributed $25,000 (unused $5,000)
+And: Year 3: want to contribute $50,000
+When: Calculating available cap for Year 3
+Then: Available = $30,000 + $10,000 + $5,000 = $45,000
+And: Can contribute $45,000 (within carry-forward)
+And: Remaining $5,000 would be excess
+```
+
+---
+
+#### US-12.4: Excess contributions taxed at 15%
+**As a** user  
+**I want to** see tax on excess contributions  
+**So that** I understand the cost of over-contributing
+
+**Acceptance Criteria:**
+- [ ] Excess = contributions - available cap (including carry-forward)
+- [ ] Excess taxed at 15% within the super fund
+- [ ] Tax deducted from super account balance (not external account)
+- [ ] Warning shown when contribution exceeds cap
+
+**Test Case:**
+```
+Given: Available cap = $30,000 (no carry-forward)
+And: Total contributions = $40,000
+When: Year ends
+Then: Excess = $10,000
+And: Excess tax = $10,000 × 15% = $1,500
+And: Super account reduced by $1,500
+And: Warning displayed: "Excess concessional contribution"
+```
+
+---
+
+## Phase 3: Multi-Person (Future)
 
 ### US-P2.1: Create a scenario
 **As a** user  
@@ -410,17 +628,21 @@ CPI Profile:
 ## Story Map Summary
 
 ```
-                    Phase 1 (MVP)              Phase 2        Phase 3      Phase 4+
-                    ─────────────              ───────        ───────      ────────
+                    Phase 1 (MVP)              Phase 2              Phase 3      Phase 4+
+                    ─────────────              ───────              ───────      ────────
 Accounts            US-1.1 to 1.4              
 Spreadsheet         US-2.1 to 2.5              
 Assumptions         US-3.1 to 3.3              
 Events              US-4.1 to 4.3              
 Forecast Config     US-5.1 to 5.3              
 Charts              US-6.1, 6.2                
-Tax                 US-7.1 (basic)             Super rules    
+Tax (Income)        US-7.1 (basic)             
+Tax Funding         US-9.1, 9.2                
+CGT                                            US-10.1 to 10.3
+Tax-Free Income                                US-11.1
+Super Contributions                            US-12.1 to 12.4
 Persistence         US-8.1, 8.2                Sync           
 Scenarios                                      US-P2.1-2.2    
-Multi-Person                                                  US-P3.1-3.2  
-AI Chat                                                                    US-P4.1
+Multi-Person                                                        US-P3.1-3.2  
+AI Chat                                                                          US-P4.1
 ```
