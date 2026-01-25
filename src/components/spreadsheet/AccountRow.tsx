@@ -2,18 +2,21 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { YearCell } from './YearCell';
 import type { Account } from '../../schemas/account';
+import type { Person } from '../../schemas/person';
 import type { YearResult } from '../../schemas/forecast';
+import { getAccountEndYear } from '../../engine/accounts';
 
 interface AccountRowProps {
   account: Account;
   years: YearResult[];
+  persons?: Person[];
   onClick?: () => void;
   isDraggable?: boolean;
   eventDescriptions?: Map<number, string[]>;
   highlightColor?: string;
 }
 
-export function AccountRow({ account, years, onClick, isDraggable = false, eventDescriptions, highlightColor }: AccountRowProps) {
+export function AccountRow({ account, years, persons = [], onClick, isDraggable = false, eventDescriptions, highlightColor }: AccountRowProps) {
   const {
     attributes,
     listeners,
@@ -59,18 +62,33 @@ export function AccountRow({ account, years, onClick, isDraggable = false, event
       {years.map((yearData) => {
         const accountResult = yearData.accounts.find((a) => a.accountId === account.id);
         const value = accountResult?.endValue ?? 0;
+        const contributions = accountResult?.contributions ?? 0;
         const descriptions = eventDescriptions?.get(yearData.year);
         const hasEvent = descriptions && descriptions.length > 0;
         // Warn for negative balances on asset accounts (overdrawn)
         const shouldWarnNegative = account.type === 'asset';
+        
+        // Check for contributions to a closed (transferred/sold) account
+        const endYear = getAccountEndYear(account, persons);
+        const isClosedAccount = (account.endBehavior === 'transfer' || account.endBehavior === 'sell') && endYear !== undefined;
+        const hasContributionAfterClose = isClosedAccount && contributions > 0 && yearData.year >= endYear;
+        
+        // Build tooltip
+        let tooltip = hasEvent ? descriptions.join('\n') : undefined;
+        if (hasContributionAfterClose) {
+          const closedWarning = `⚠️ Contribution to closed account: This account was ${account.endBehavior === 'sell' ? 'sold' : 'transferred'} in ${endYear}. Consider redirecting this income to another account.`;
+          tooltip = tooltip ? `${tooltip}\n${closedWarning}` : closedWarning;
+        }
+        
         return (
           <YearCell
             key={yearData.year}
             value={value}
             highlightColor={hasEvent ? highlightColor : undefined}
-            tooltip={hasEvent ? descriptions.join('\n') : undefined}
+            tooltip={tooltip}
             warnNegative={shouldWarnNegative}
             autoTopupApplied={accountResult?.autoTopupApplied}
+            contributionAfterClose={hasContributionAfterClose}
           />
         );
       })}

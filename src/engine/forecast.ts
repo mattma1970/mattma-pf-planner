@@ -330,15 +330,21 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           }
         }
       } else if (isLifecycleEnding) {
-        // Account ended this year - value is zero
-        endValue = 0;
-        projectedValue = 0;
+        // Account ended this year via transfer/sell - its opening balance was moved out,
+        // but it may still receive income deposits that should accumulate
+        endValue = contributions;
+        projectedValue = contributions;
       } else if (!isActive) {
         // Account not active
         if (account.endBehavior === 'hold') {
           endValue = openingValue;
           projectedValue = openingValue;
+        } else if (account.endBehavior === 'transfer' || account.endBehavior === 'sell') {
+          // After transfer/sell, keep accumulated contributions (e.g., income deposits)
+          endValue = openingValue + contributions;
+          projectedValue = openingValue + contributions;
         } else {
+          // 'zero' or default - set to zero
           endValue = 0;
           projectedValue = 0;
         }

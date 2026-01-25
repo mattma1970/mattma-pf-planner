@@ -6,6 +6,7 @@ interface YearCellProps {
   tooltip?: string;
   warnNegative?: boolean;
   autoTopupApplied?: boolean;
+  contributionAfterClose?: boolean;
 }
 
 const currencyFormatter = new Intl.NumberFormat('en-AU', {
@@ -15,20 +16,22 @@ const currencyFormatter = new Intl.NumberFormat('en-AU', {
   maximumFractionDigits: 0,
 });
 
-export function YearCell({ value, onClick, isNegative, highlightColor, tooltip, warnNegative, autoTopupApplied }: YearCellProps) {
+export function YearCell({ value, onClick, isNegative, highlightColor, tooltip, warnNegative, autoTopupApplied, contributionAfterClose }: YearCellProps) {
   const isValueNegative = isNegative ?? value < 0;
   const colorClass = isValueNegative ? 'text-red-600' : 'text-gray-900';
   
   // For warnNegative, show a subtle red background when value is negative
-  // Priority: negative warning (red) > auto top-up (amber) > highlight color
+  // Priority: negative warning (red) > contribution after close (amber) > auto top-up (amber) > highlight color
   const showNegativeWarning = warnNegative && value < 0;
   const bgStyle = showNegativeWarning 
     ? { backgroundColor: '#fee2e2' } // red-100
-    : autoTopupApplied
+    : contributionAfterClose
       ? { backgroundColor: '#fef3c7' } // amber-100
-      : highlightColor 
-        ? { backgroundColor: highlightColor } 
-        : undefined;
+      : autoTopupApplied
+        ? { backgroundColor: '#fef3c7' } // amber-100
+        : highlightColor 
+          ? { backgroundColor: highlightColor } 
+          : undefined;
   
   // Build tooltip with appropriate warnings
   let warningTooltip = tooltip;

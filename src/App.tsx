@@ -124,6 +124,7 @@ function App() {
             <SpreadsheetView
               forecast={forecast}
               accounts={accounts as unknown as Account[]}
+              persons={persons}
               events={events as unknown as Event[]}
               showEventHighlights={showEventHighlights}
               eventHighlightColor={settings.eventHighlightColor}

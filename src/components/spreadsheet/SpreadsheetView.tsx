@@ -18,6 +18,7 @@ import { GroupHeader } from './GroupHeader';
 import { YearCell } from './YearCell';
 import type { Account, AccountType } from '../../schemas/account';
 import type { Event } from '../../schemas/event';
+import type { Person } from '../../schemas/person';
 import type { ForecastResult, YearResult } from '../../schemas/forecast';
 import type { TaxAggregation, TaxEvent } from '../../schemas/tax';
 import { TaxDetailPanel } from '../tax';
@@ -25,6 +26,7 @@ import { TaxDetailPanel } from '../tax';
 interface SpreadsheetViewProps {
   forecast: ForecastResult | null;
   accounts: Account[];
+  persons?: Person[];
   events?: Event[];
   showEventHighlights?: boolean;
   eventHighlightColor?: string;
@@ -57,7 +59,7 @@ interface TaxDetailState {
   taxEvents: TaxEvent[];
 }
 
-export function SpreadsheetView({ forecast, accounts, events = [], showEventHighlights = false, eventHighlightColor, onAccountClick, onReorder }: SpreadsheetViewProps) {
+export function SpreadsheetView({ forecast, accounts, persons = [], events = [], showEventHighlights = false, eventHighlightColor, onAccountClick, onReorder }: SpreadsheetViewProps) {
   const years = forecast?.years ?? [];
   const [selectedTaxDetail, setSelectedTaxDetail] = useState<TaxDetailState | null>(null);
   const [isTaxExpanded, setIsTaxExpanded] = useState(false);
@@ -301,6 +303,7 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
                       key={account.id}
                       account={account}
                       years={years}
+                      persons={persons}
                       onClick={() => onAccountClick?.(account.id)}
                       isDraggable={!!onReorder}
                       eventDescriptions={eventDescriptionsByAccount.get(account.id)}
