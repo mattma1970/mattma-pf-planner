@@ -34,6 +34,14 @@ export type IncomeTaxTreatment = z.infer<typeof IncomeTaxTreatmentSchema>;
 export const LiquidityTypeSchema = z.enum(['liquid', 'fixed']);
 export type LiquidityType = z.infer<typeof LiquidityTypeSchema>;
 
+export const AutoTopupSchema = z.object({
+  enabled: z.boolean().default(false),
+  threshold: z.number().default(0),
+  fromAccountId: z.string().uuid(),
+  targetBalance: z.number().optional(),
+});
+export type AutoTopup = z.infer<typeof AutoTopupSchema>;
+
 export const AccountSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1),
@@ -64,5 +72,8 @@ export const AccountSchema = z.object({
   eligibleForCgtDiscount: z.boolean().optional(),
   
   taxFundedFromAccountId: z.string().uuid().optional(),
+  
+  // Auto-topup: automatically transfer from another account when balance falls below threshold
+  autoTopup: AutoTopupSchema.optional(),
 });
 export type Account = z.infer<typeof AccountSchema>;

@@ -267,10 +267,15 @@ Transactions are processed in a fixed order to ensure proper fund availability:
 
 5. Derived Flows       = income deposits, expense withdrawals
 
-6. Tax Calculation     = aggregate, calculate, and deduct from funding accounts
+6. Auto Top-Up         = if asset balance < threshold, transfer from source account
+                         → Brings balance back to threshold or target balance
+
+7. Tax Calculation     = aggregate, calculate, and deduct from funding accounts
 ```
 
-This ordering ensures that when a user sells an asset and uses proceeds for transfers in the same year (e.g., house sale → downsizer contribution), the funds are available.
+This ordering ensures that:
+- When a user sells an asset and uses proceeds for transfers in the same year (e.g., house sale → downsizer contribution), the funds are available
+- Auto top-ups happen after expenses are withdrawn, ensuring the account is replenished before tax is calculated
 
 ### 5.3 Growth Calculation Method
 
@@ -523,6 +528,7 @@ Acquisition Year: ____
 - Negative balance support with warnings
 - Growth calculation method setting (Opening Balance vs Average Balance)
 - UI labels clarifying "Closing Balances"
+- Auto top-up for asset accounts (transfer from source when balance falls below threshold)
 
 ---
 

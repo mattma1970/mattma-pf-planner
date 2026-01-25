@@ -100,6 +100,13 @@ export const GrowthProfileSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('decreasing'), rate: z.number(), changePerYear: z.number() }),
 ]);
 
+export const AutoTopupSchema = z.object({
+  enabled: z.boolean().default(false),
+  threshold: z.number().default(0),
+  fromAccountId: z.string().uuid(),
+  targetBalance: z.number().optional(),
+});
+
 export const AccountSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1),
@@ -115,6 +122,8 @@ export const AccountSchema = z.object({
   taxClassification: TaxClassificationSchema.optional(),
   costBase: z.number().optional(),
   acquisitionYear: z.number().int().optional(),
+  // Auto top-up for assets
+  autoTopup: AutoTopupSchema.optional(),
 });
 
 export type Account = z.infer<typeof AccountSchema>;

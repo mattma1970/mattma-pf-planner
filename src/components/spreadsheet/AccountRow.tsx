@@ -70,6 +70,7 @@ export function AccountRow({ account, years, onClick, isDraggable = false, event
             highlightColor={hasEvent ? highlightColor : undefined}
             tooltip={hasEvent ? descriptions.join('\n') : undefined}
             warnNegative={shouldWarnNegative}
+            autoTopupApplied={accountResult?.autoTopupApplied}
           />
         );
       })}

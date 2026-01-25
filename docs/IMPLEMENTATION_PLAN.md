@@ -22,10 +22,15 @@ This document outlines the staged delivery plan for the Retirement Financial Pla
 | Configurable accounts | User creates accounts of type: income, expense, asset, liability |
 | Account properties | Name, type, starting value, growth rate |
 | Personal income tax | Marginal tax rates (hardcoded for MVP) |
+| Capital gains tax | CGT on asset sales with 50% discount for long-term holdings |
 | CPI assumption | Single rate for period |
 | Investment growth | Configurable per account or default |
+| Growth calculation methods | Opening Balance or Average Balance (configurable in Settings) |
+| Auto top-up | Assets can auto-transfer from source account when balance falls below threshold |
 | **Spreadsheet view** | Accounts as rows, years as columns, horizontal scroll |
 | Sticky account names | Left column fixed during horizontal scroll |
+| Closing balances | Asset/liability values show end-of-year balances |
+| Negative balance warnings | Visual indicator when accounts go overdrawn |
 | Expandable assumptions | Click account row to see underlying assumptions |
 | Grouped sections | Income, Expenses, Assets, Liabilities, Calculated |
 | Simple charts | Net worth over time, income vs expenses |
@@ -36,7 +41,8 @@ This document outlines the staged delivery plan for the Retirement Financial Pla
 - Set initial value
 - Set growth profile (fixed %, CPI + x%, or +/- x% per year)
 - Set start/end year (optional)
-- Set end behavior (zero, transfer to account, hold value)
+- Set end behavior (zero, transfer to account, hold value, sell with CGT)
+- Auto top-up: enable automatic transfers from source account when balance falls below threshold
 
 **Out of Scope for Phase 1:**
 - Multi-person, multi-period, superannuation rules, scenarios, rule engine

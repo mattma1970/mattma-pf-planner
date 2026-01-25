@@ -71,7 +71,8 @@ Rather than hardcoding specific income sources, assets, or liabilities, the syst
 - Owner (which person, or joint)
 - Growth/interest rate (can reference assumptions)
 - Tax treatment (how it interacts with tax rules)
-- Epoch behavior (carries forward, liquidates, transfers, etc.)
+- Epoch behavior (carries forward, liquidates, transfers, sells with CGT)
+- Auto top-up (for assets: automatically transfer from another account when balance falls below threshold)
 
 This allows:
 - A simple user to configure: "Salary", "House", "Super", "Living Costs"

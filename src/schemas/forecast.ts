@@ -17,6 +17,7 @@ export const AccountYearResultSchema = z.object({
   withdrawals: z.number(),
   transfers: z.number(),
   endValue: z.number(),
+  autoTopupApplied: z.boolean().optional(),
 });
 export type AccountYearResult = z.infer<typeof AccountYearResultSchema>;
 

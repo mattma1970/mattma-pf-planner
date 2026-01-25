@@ -289,7 +289,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           derivedFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal' });
         }
         if (account.type === 'asset' && account.returnRate && account.incomeTargetAccountId && balanceForGrowth > 0) {
-          const incomeGenerated = balanceForGrowth * (account.returnRate / 100);
+          const incomeGenerated = balanceForGrowth * account.returnRate;
           derivedFlows.push({ accountId: account.incomeTargetAccountId, amount: incomeGenerated, type: 'contribution' });
         }
         if (account.type === 'asset' && account.fundedByAccountId) {
@@ -379,7 +379,44 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     }
 
     // ===========================================
-    // PHASE 6: Tax calculations
+    // PHASE 6: Auto-topup processing
+    // ===========================================
+    
+    for (const account of accounts) {
+      if (account.type !== 'asset' || !account.autoTopup?.enabled) continue;
+      
+      const result = accountResults.get(account.id);
+      if (!result) continue;
+      
+      const threshold = account.autoTopup.threshold ?? 0;
+      
+      // Check if balance is below threshold
+      if (result.endValue < threshold) {
+        const sourceResult = accountResults.get(account.autoTopup.fromAccountId);
+        if (!sourceResult) continue;
+        
+        // Calculate topup amount
+        const targetBalance = account.autoTopup.targetBalance ?? threshold;
+        const topupAmount = targetBalance - result.endValue;
+        
+        if (topupAmount > 0) {
+          // Apply topup to target account
+          result.contributions += topupAmount;
+          result.endValue += topupAmount;
+          result.autoTopupApplied = true;
+          accountValues.set(account.id, result.endValue);
+          
+          // Withdraw from source account (allow negative balance)
+          sourceResult.withdrawals += topupAmount;
+          sourceResult.endValue -= topupAmount;
+          sourceResult.autoTopupApplied = true;
+          accountValues.set(account.autoTopup.fromAccountId, sourceResult.endValue);
+        }
+      }
+    }
+
+    // ===========================================
+    // PHASE 7: Tax calculations
     // ===========================================
     
     const taxEvents: TaxEvent[] = [];

@@ -16,9 +16,9 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
   const [growthType, setGrowthType] = useState<GrowthProfile['type']>(account?.growthProfile?.type ?? 'fixed');
   const [growthRate, setGrowthRate] = useState(() => {
     const gp = account?.growthProfile;
-    if (gp?.type === 'fixed') return gp.rate.toString();
-    if (gp?.type === 'increasing') return gp.rate.toString();
-    if (gp?.type === 'decreasing') return gp.rate.toString();
+    if (gp?.type === 'fixed') return (gp.rate * 100).toString();
+    if (gp?.type === 'increasing') return (gp.rate * 100).toString();
+    if (gp?.type === 'decreasing') return (gp.rate * 100).toString();
     return '0';
   });
   const [cpiOperation, setCpiOperation] = useState<GrowthOperation>(() => {
@@ -28,13 +28,13 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
   });
   const [cpiValue, setCpiValue] = useState(() => {
     const gp = account?.growthProfile;
-    if (gp?.type === 'cpiLinked') return gp.value?.toString() ?? '0';
+    if (gp?.type === 'cpiLinked') return ((gp.value ?? 0) * 100).toString();
     return '0';
   });
   const [changePerYear, setChangePerYear] = useState(() => {
     const gp = account?.growthProfile;
-    if (gp?.type === 'increasing') return gp.changePerYear.toString();
-    if (gp?.type === 'decreasing') return gp.changePerYear.toString();
+    if (gp?.type === 'increasing') return (gp.changePerYear * 100).toString();
+    if (gp?.type === 'decreasing') return (gp.changePerYear * 100).toString();
     return '0';
   });
 
@@ -74,7 +74,7 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
   const [transferToAccountId, setTransferToAccountId] = useState(account?.transferToAccountId ?? '');
   const [depositsToAccountId, setDepositsToAccountId] = useState(account?.depositsToAccountId ?? '');
   const [fundedByAccountId, setFundedByAccountId] = useState(account?.fundedByAccountId ?? '');
-  const [returnRate, setReturnRate] = useState(account?.returnRate?.toString() ?? '');
+  const [returnRate, setReturnRate] = useState(account?.returnRate ? (account.returnRate * 100).toString() : '');
   const [incomeTargetAccountId, setIncomeTargetAccountId] = useState(account?.incomeTargetAccountId ?? '');
   const [liquidityType, setLiquidityType] = useState<LiquidityType | ''>(account?.liquidityType ?? '');
 
@@ -87,6 +87,12 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
   const [acquisitionYear, setAcquisitionYear] = useState(account?.acquisitionYear?.toString() ?? '');
   const [eligibleForCgtDiscount, setEligibleForCgtDiscount] = useState(account?.eligibleForCgtDiscount ?? true);
 
+  // Auto-topup settings for assets
+  const [autoTopupEnabled, setAutoTopupEnabled] = useState(account?.autoTopup?.enabled ?? false);
+  const [autoTopupThreshold, setAutoTopupThreshold] = useState(account?.autoTopup?.threshold?.toString() ?? '0');
+  const [autoTopupFromAccountId, setAutoTopupFromAccountId] = useState(account?.autoTopup?.fromAccountId ?? '');
+  const [autoTopupTargetBalance, setAutoTopupTargetBalance] = useState(account?.autoTopup?.targetBalance?.toString() ?? '');
+
   const otherAccounts = accounts.filter((a) => a.id !== account?.id);
   const assetAccounts = accounts.filter((a) => a.type === 'asset' && a.id !== account?.id);
 
@@ -94,9 +100,9 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
     e.preventDefault();
 
     const growthProfile: GrowthProfile = (() => {
-      const rate = parseFloat(growthRate) || 0;
-      const change = parseFloat(changePerYear) || 0;
-      const cpiVal = parseFloat(cpiValue) || 0;
+      const rate = (parseFloat(growthRate) || 0) / 100;
+      const change = (parseFloat(changePerYear) || 0) / 100;
+      const cpiVal = (parseFloat(cpiValue) || 0) / 100;
       switch (growthType) {
         case 'fixed':
           return { type: 'fixed' as const, rate };
@@ -140,7 +146,7 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
       type,
       initialValue: parseFloat(initialValue) || 0,
       growthProfile,
-      returnRate: type === 'asset' && returnRate ? parseFloat(returnRate) : undefined,
+      returnRate: type === 'asset' && returnRate ? parseFloat(returnRate) / 100 : undefined,
       incomeTargetAccountId: type === 'asset' && incomeTargetAccountId ? incomeTargetAccountId : undefined,
       liquidityType: type === 'asset' && liquidityType ? liquidityType : undefined,
       startCondition,
@@ -158,6 +164,14 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
       costBase: type === 'asset' && isSellBehavior && costBase ? parseFloat(costBase) : undefined,
       acquisitionYear: type === 'asset' && isSellBehavior && acquisitionYear ? parseInt(acquisitionYear) : undefined,
       eligibleForCgtDiscount: type === 'asset' && isSellBehavior ? eligibleForCgtDiscount : undefined,
+      
+      // Auto-topup settings (for assets)
+      autoTopup: type === 'asset' && autoTopupEnabled && autoTopupFromAccountId ? {
+        enabled: true,
+        threshold: parseFloat(autoTopupThreshold) || 0,
+        fromAccountId: autoTopupFromAccountId,
+        targetBalance: autoTopupTargetBalance ? parseFloat(autoTopupTargetBalance) : undefined,
+      } : undefined,
     });
   };
 
@@ -468,6 +482,58 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
           <p className="text-xs text-gray-500 mt-1">
             Override which account pays tax generated by this account.
           </p>
+        </div>
+      )}
+
+      {type === 'asset' && (
+        <div className="border-t pt-4">
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Auto Top-Up</h3>
+          <div className="space-y-4">
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={autoTopupEnabled}
+                onChange={(e) => setAutoTopupEnabled(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Enable automatic top-up when balance falls below threshold
+            </label>
+            
+            {autoTopupEnabled && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-4">
+                <Select
+                  label="Top Up From"
+                  value={autoTopupFromAccountId}
+                  onChange={(e) => setAutoTopupFromAccountId(e.target.value)}
+                >
+                  <option value="" disabled>Select source account...</option>
+                  {assetAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </Select>
+                <div className="grid grid-cols-2 gap-4">
+                  <Input
+                    label="Threshold ($)"
+                    type="number"
+                    value={autoTopupThreshold}
+                    onChange={(e) => setAutoTopupThreshold(e.target.value)}
+                    placeholder="0"
+                  />
+                  <Input
+                    label="Target Balance ($)"
+                    type="number"
+                    value={autoTopupTargetBalance}
+                    onChange={(e) => setAutoTopupTargetBalance(e.target.value)}
+                    placeholder="Optional"
+                  />
+                </div>
+                <p className="text-xs text-blue-600">
+                  When balance falls below threshold, transfer from source account. 
+                  If target balance is set, top up to that amount; otherwise top up to threshold.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

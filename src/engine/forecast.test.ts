@@ -511,4 +511,165 @@ describe('calculateForecast', () => {
       expect(bank2025.endValue).toBeCloseTo(635000, 2);
     });
   });
+
+  describe('auto-topup', () => {
+    it('tops up account when balance falls below threshold', () => {
+      const bankAccount: Account = {
+        id: 'bank-1111-1111-1111-111111111111',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 10000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        autoTopup: {
+          enabled: true,
+          threshold: 0,
+          fromAccountId: 'pension-1111-1111-1111-111111111111',
+        },
+      };
+
+      const pensionAccount: Account = {
+        id: 'pension-1111-1111-1111-111111111111',
+        name: 'Pension Fund',
+        type: 'asset',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const expenseAccount: Account = {
+        id: 'expense-1111-1111-1111-111111111111',
+        name: 'Living Expenses',
+        type: 'expense',
+        initialValue: 50000, // More than bank balance
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, pensionAccount, expenseAccount],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const bank2025 = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      const pension2025 = result.years[0].accounts.find(a => a.accountId === pensionAccount.id)!;
+      
+      // Bank: $10k - $50k expense = -$40k, then topped up to $0
+      // Topup amount = $40k
+      expect(bank2025.endValue).toBe(0);
+      expect(bank2025.contributions).toBe(40000); // Topup amount
+      
+      // Pension: $500k - $40k topup = $460k
+      expect(pension2025.endValue).toBe(460000);
+      expect(pension2025.withdrawals).toBe(40000);
+    });
+
+    it('tops up to target balance when specified', () => {
+      const bankAccount: Account = {
+        id: 'bank-1111-1111-1111-111111111111',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 10000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        autoTopup: {
+          enabled: true,
+          threshold: 0,
+          fromAccountId: 'pension-1111-1111-1111-111111111111',
+          targetBalance: 20000, // Top up to $20k when below $0
+        },
+      };
+
+      const pensionAccount: Account = {
+        id: 'pension-1111-1111-1111-111111111111',
+        name: 'Pension Fund',
+        type: 'asset',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const expenseAccount: Account = {
+        id: 'expense-1111-1111-1111-111111111111',
+        name: 'Living Expenses',
+        type: 'expense',
+        initialValue: 50000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, pensionAccount, expenseAccount],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const bank2025 = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      const pension2025 = result.years[0].accounts.find(a => a.accountId === pensionAccount.id)!;
+      
+      // Bank: $10k - $50k = -$40k, topped up to $20k target
+      // Topup amount = $20k - (-$40k) = $60k
+      expect(bank2025.endValue).toBe(20000);
+      expect(bank2025.contributions).toBe(60000);
+      
+      // Pension: $500k - $60k = $440k
+      expect(pension2025.endValue).toBe(440000);
+    });
+
+    it('allows source account to go negative if insufficient funds', () => {
+      const bankAccount: Account = {
+        id: 'bank-1111-1111-1111-111111111111',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 10000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        autoTopup: {
+          enabled: true,
+          threshold: 0,
+          fromAccountId: 'pension-1111-1111-1111-111111111111',
+        },
+      };
+
+      const pensionAccount: Account = {
+        id: 'pension-1111-1111-1111-111111111111',
+        name: 'Pension Fund',
+        type: 'asset',
+        initialValue: 20000, // Only $20k, not enough for $40k topup
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const expenseAccount: Account = {
+        id: 'expense-1111-1111-1111-111111111111',
+        name: 'Living Expenses',
+        type: 'expense',
+        initialValue: 50000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, pensionAccount, expenseAccount],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const bank2025 = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      const pension2025 = result.years[0].accounts.find(a => a.accountId === pensionAccount.id)!;
+      
+      // Bank topped up to $0 (topup = $40k)
+      expect(bank2025.endValue).toBe(0);
+      
+      // Pension goes negative: $20k - $40k = -$20k
+      expect(pension2025.endValue).toBe(-20000);
+    });
+  });
 });

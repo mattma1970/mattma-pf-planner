@@ -5,6 +5,7 @@ interface YearCellProps {
   highlightColor?: string;
   tooltip?: string;
   warnNegative?: boolean;
+  autoTopupApplied?: boolean;
 }
 
 const currencyFormatter = new Intl.NumberFormat('en-AU', {
@@ -14,21 +15,28 @@ const currencyFormatter = new Intl.NumberFormat('en-AU', {
   maximumFractionDigits: 0,
 });
 
-export function YearCell({ value, onClick, isNegative, highlightColor, tooltip, warnNegative }: YearCellProps) {
+export function YearCell({ value, onClick, isNegative, highlightColor, tooltip, warnNegative, autoTopupApplied }: YearCellProps) {
   const isValueNegative = isNegative ?? value < 0;
   const colorClass = isValueNegative ? 'text-red-600' : 'text-gray-900';
   
   // For warnNegative, show a subtle red background when value is negative
+  // Priority: negative warning (red) > auto top-up (amber) > highlight color
   const showNegativeWarning = warnNegative && value < 0;
   const bgStyle = showNegativeWarning 
     ? { backgroundColor: '#fee2e2' } // red-100
-    : highlightColor 
-      ? { backgroundColor: highlightColor } 
-      : undefined;
+    : autoTopupApplied
+      ? { backgroundColor: '#fef3c7' } // amber-100
+      : highlightColor 
+        ? { backgroundColor: highlightColor } 
+        : undefined;
   
-  const warningTooltip = showNegativeWarning 
-    ? `⚠️ Negative balance (overdrawn)${tooltip ? '\n' + tooltip : ''}`
-    : tooltip;
+  // Build tooltip with appropriate warnings
+  let warningTooltip = tooltip;
+  if (showNegativeWarning) {
+    warningTooltip = `⚠️ Negative balance (overdrawn)${tooltip ? '\n' + tooltip : ''}`;
+  } else if (autoTopupApplied) {
+    warningTooltip = `↔️ Auto top-up applied${tooltip ? '\n' + tooltip : ''}`;
+  }
 
   return (
     <td
