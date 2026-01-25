@@ -36,7 +36,7 @@ export function AccountRow({ account, years, onClick, isDraggable = false, event
       className={`hover:bg-gray-50 ${isDragging ? 'bg-blue-50' : ''}`}
     >
       <td
-        className="px-3 py-2 text-left font-medium text-gray-900 sticky left-0 bg-white border-r border-gray-200"
+        className="px-3 py-2 text-left font-medium text-gray-900 sticky left-0 bg-white border-r border-gray-200 min-w-48"
       >
         <div className="flex items-center gap-2">
           {isDraggable && (

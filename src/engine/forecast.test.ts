@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { calculateForecast } from './forecast';
-import type { Account, Assumptions, Person, Event } from '../schemas';
+import type { Account, Assumptions, Person, Event, Settings } from '../schemas';
+import { defaultSettings } from '../schemas';
 
 describe('calculateForecast', () => {
   const defaultAssumptions: Assumptions = {
@@ -8,6 +9,8 @@ describe('calculateForecast', () => {
     investmentGrowth: { baseValue: 0.05 },
     superGrowth: { baseValue: 0.07 },
   };
+
+  const testSettings: Settings = { ...defaultSettings };
 
   const defaultPerson: Person = {
     id: 'person-1111-1111-1111-111111111111',
@@ -32,6 +35,7 @@ describe('calculateForecast', () => {
         assumptions: defaultAssumptions,
         events: [],
         persons: [],
+        settings: testSettings,
         startYear: 2025,
         endYear: 2030,
       });
@@ -78,6 +82,7 @@ describe('calculateForecast', () => {
         assumptions: defaultAssumptions,
         events: [],
         persons: [],
+        settings: testSettings,
         startYear: 2025,
         endYear: 2030,
       });
@@ -118,6 +123,7 @@ describe('calculateForecast', () => {
         assumptions: defaultAssumptions,
         events: [],
         persons: [],
+        settings: testSettings,
         startYear: 2025,
         endYear: 2030,
       });
@@ -166,6 +172,7 @@ describe('calculateForecast', () => {
         assumptions: defaultAssumptions,
         events: [],
         persons: [],
+        settings: testSettings,
         startYear: 2025,
         endYear: 2026,
       });
@@ -202,6 +209,7 @@ describe('calculateForecast', () => {
         assumptions: defaultAssumptions,
         events: [],
         persons: [],
+        settings: testSettings,
         startYear: 2025,
         endYear: 2026,
       });
@@ -247,6 +255,7 @@ describe('calculateForecast', () => {
         assumptions: defaultAssumptions,
         events: [buyHouseEvent],
         persons: [],
+        settings: testSettings,
         startYear: 2025,
         endYear: 2027,
       });
@@ -281,6 +290,7 @@ describe('calculateForecast', () => {
         assumptions: defaultAssumptions,
         events: [],
         persons: [defaultPerson],
+        settings: testSettings,
         startYear: endYear - 2,
         endYear: endYear + 2,
       });

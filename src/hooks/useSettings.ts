@@ -1,29 +1,24 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Settings } from '../schemas';
 import { defaultSettings } from '../schemas/settings';
-
-const SETTINGS_KEY = 'retirement-planner-settings';
+import { repository } from '../data';
 
 export function useSettings() {
-  const [settings, setSettings] = useState<Settings>(() => {
-    const stored = localStorage.getItem(SETTINGS_KEY);
-    if (stored) {
-      try {
-        return { ...defaultSettings, ...JSON.parse(stored) };
-      } catch {
-        return defaultSettings;
-      }
-    }
-    return defaultSettings;
-  });
+  const [settings, setSettings] = useState<Settings>(defaultSettings);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  }, [settings]);
-
-  const updateSettings = useCallback((updates: Partial<Settings>) => {
-    setSettings((prev) => ({ ...prev, ...updates }));
+    repository.getSettings().then((s) => {
+      setSettings(s);
+      setLoading(false);
+    });
   }, []);
 
-  return { settings, updateSettings };
+  const updateSettings = useCallback(async (updates: Partial<Settings>) => {
+    const newSettings = { ...settings, ...updates };
+    setSettings(newSettings);
+    await repository.saveSettings(newSettings);
+  }, [settings]);
+
+  return { settings, updateSettings, loading };
 }

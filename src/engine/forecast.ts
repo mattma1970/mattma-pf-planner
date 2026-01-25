@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid';
 import type {
   Account,
   Assumptions,
@@ -7,6 +8,8 @@ import type {
   ForecastResult,
   YearResult,
   AccountYearResult,
+  Settings,
+  TaxEvent,
 } from '../schemas';
 import { calculateIncomeTax } from './tax';
 import { resolveAssumptionForYear } from './assumptions';
@@ -17,12 +20,13 @@ export interface ForecastInput {
   assumptions: Assumptions;
   events: Event[];
   persons: Person[];
+  settings: Settings;
   startYear: number;
   endYear: number;
 }
 
 export function calculateForecast(input: ForecastInput): ForecastResult {
-  const { accounts, assumptions, events, persons, startYear, endYear } = input;
+  const { accounts, assumptions, events, persons, settings, startYear, endYear } = input;
 
   const years: YearResult[] = [];
   const accountValues: Map<string, number> = new Map();
@@ -225,6 +229,25 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     const taxPayable = calculateIncomeTax(totalIncome, year);
     const netPosition = totalIncome - totalExpenses - taxPayable;
 
+    const taxEvents: TaxEvent[] = [];
+    
+    if (taxPayable > 0) {
+      const fundingAccountId = settings.defaultTaxFundingAccountId;
+      const fundingAccount = fundingAccountId 
+        ? accounts.find(a => a.id === fundingAccountId) 
+        : undefined;
+      
+      taxEvents.push({
+        id: uuidv4(),
+        year,
+        type: 'incomeTax',
+        description: 'Income Tax',
+        amount: taxPayable,
+        fundedFromAccountId: fundingAccountId ?? 'unassigned',
+        fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
+      });
+    }
+
     if (totalAssets > peakAssets) {
       peakAssets = totalAssets;
       peakAssetsYear = year;
@@ -238,6 +261,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       totalIncome,
       totalExpenses,
       taxPayable,
+      taxEvents,
       netPosition,
       resolvedAssumptions,
     });

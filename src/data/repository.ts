@@ -1,6 +1,9 @@
-import type { Account, Assumptions, Event, Person, Epoch } from '../schemas';
+import type { Account, Assumptions, Event, Person, Epoch, Settings } from '../schemas';
+import { defaultSettings } from '../schemas';
 import { db } from './database';
 import { defaultAssumptions, DEFAULT_ASSUMPTIONS_ID } from './defaults';
+
+const DEFAULT_SETTINGS_ID = 'default-settings';
 
 export interface DataRepository {
   getAccounts(): Promise<Account[]>;
@@ -25,6 +28,9 @@ export interface DataRepository {
 
   getAssumptions(): Promise<Assumptions>;
   saveAssumptions(assumptions: Assumptions): Promise<void>;
+
+  getSettings(): Promise<Settings>;
+  saveSettings(settings: Settings): Promise<void>;
 
   clearAll(): Promise<void>;
 }
@@ -104,6 +110,19 @@ export class IndexedDBRepository implements DataRepository {
 
   async saveAssumptions(assumptions: Assumptions): Promise<void> {
     await db.assumptions.put({ ...assumptions, id: DEFAULT_ASSUMPTIONS_ID });
+  }
+
+  async getSettings(): Promise<Settings> {
+    const settings = await db.settings.get(DEFAULT_SETTINGS_ID);
+    if (!settings) {
+      return { ...defaultSettings };
+    }
+    const { id: _id, ...rest } = settings;
+    return rest;
+  }
+
+  async saveSettings(settings: Settings): Promise<void> {
+    await db.settings.put({ ...settings, id: DEFAULT_SETTINGS_ID });
   }
 
   async clearAll(): Promise<void> {

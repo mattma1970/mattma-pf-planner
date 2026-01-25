@@ -30,7 +30,7 @@ function App() {
 
   useEffect(() => {
     refreshForecast();
-  }, [accounts, assumptions, events, refreshForecast]);
+  }, [accounts, assumptions, events, settings, refreshForecast]);
 
   const handleAddAccount = () => {
     setEditingAccount(null);
@@ -193,7 +193,29 @@ function App() {
         onSave={handleSaveEvent}
       />
       <Modal isOpen={showSettings} onClose={() => setShowSettings(false)} title="Settings">
-        <div className="space-y-4">
+        <div className="space-y-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Default Tax Funding Account
+            </label>
+            <select
+              value={settings.defaultTaxFundingAccountId ?? ''}
+              onChange={(e) => updateSettings({ defaultTaxFundingAccountId: e.target.value || undefined })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">Not configured</option>
+              {(accounts as unknown as Account[])
+                .filter((a) => a.type === 'asset')
+                .map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              Select the account that will be used to pay tax obligations
+            </p>
+          </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Event Highlight Color

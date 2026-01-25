@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { TaxEventSchema } from './tax';
 
 export const ResolvedAssumptionsSchema = z.object({
   cpi: z.number(),
@@ -27,6 +28,7 @@ export const YearResultSchema = z.object({
   totalIncome: z.number(),
   totalExpenses: z.number(),
   taxPayable: z.number(),
+  taxEvents: z.array(TaxEventSchema),
   netPosition: z.number(),
   resolvedAssumptions: ResolvedAssumptionsSchema,
 });

@@ -3,11 +3,12 @@ import { repository } from '../data';
 import { calculateForecast } from '../engine';
 
 export async function runForecast(startYear: number, endYear: number): Promise<ForecastResult> {
-  const [accounts, assumptions, events, persons] = await Promise.all([
+  const [accounts, assumptions, events, persons, settings] = await Promise.all([
     repository.getAccounts(),
     repository.getAssumptions(),
     repository.getEvents(),
     repository.getPersons(),
+    repository.getSettings(),
   ]);
 
   return calculateForecast({
@@ -15,6 +16,7 @@ export async function runForecast(startYear: number, endYear: number): Promise<F
     assumptions,
     events,
     persons,
+    settings,
     startYear,
     endYear,
   });

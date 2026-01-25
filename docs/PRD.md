@@ -115,19 +115,47 @@ This allows:
 │ ▸ LIABILITIES       │         │         │         │         │         │
 │   Mortgage          │ 400,000 │ 375,000 │ 350,000 │ 325,000 │         │
 ├─────────────────────┼─────────┼─────────┼─────────┼─────────┼─────────┤
+│ ▸ TAX               │         │         │         │         │         │
+│   Income Tax        │  32,000 │  33,500 │  35,100 │  36,800 │         │
+│   ─ Paid from: Cash │         │         │         │         │         │
+├─────────────────────┼─────────┼─────────┼─────────┼─────────┼─────────┤
 │ ═ CALCULATED        │         │         │         │         │         │
 │   Total Income      │ 150,000 │ 154,500 │ 159,135 │ 163,909 │         │
 │   Total Expenses    │  65,000 │  66,950 │  68,959 │  71,028 │         │
-│   Tax               │  32,000 │  33,500 │  35,100 │  36,800 │         │
+│   Total Tax         │  32,000 │  33,500 │  35,100 │  36,800 │         │
 │   Net Worth         │ 650,000 │ 795,000 │ 948,731 │1,111,639│         │
 └─────────────────────┴─────────┴─────────┴─────────┴─────────┴─────────┘
 ```
+
+### 2.6 Tax Section
+
+The **Tax section** appears below Liabilities and provides full transparency into tax calculations.
+
+**Purpose:**
+- Every tax-triggering event (income, asset sale, etc.) creates a row in this section
+- Tax obligations are grouped by the account that funds them
+- This is a **reporting section** - actual money movement is handled by the funding account configuration
+
+**Key Principles:**
+1. **Every taxable account/event must have a funding account** (required field)
+2. **Default tax funding account** can be set in Settings (typically a bank account)
+3. **Tax events are automatically generated** from:
+   - Income accounts (annual income tax)
+   - Asset sales (`endBehavior: 'sell'`) triggering CGT
+   - Future: Super contributions, dividends, etc.
+
+**Tax Row Types:**
+- `Income Tax` - from assessable income accounts
+- `Capital Gains Tax` - from asset sales (future phase)
+- `Super Contribution Tax` - excess contributions (future phase)
+
+**See also:** [TAX_DESIGN.md](TAX_DESIGN.md) for detailed tax system architecture.
 
 **Expandable Rows:** Clicking ▸ on an account row expands to show the assumptions driving that account (growth rate, CPI linkage, etc.)
 
 **Epoch Indicators:** Visual styling (background color or divider) marks epoch transitions (e.g., "Retirement starts here").
 
-### 2.6 Year-Level Overrides & Events
+### 2.7 Year-Level Overrides & Events
 
 The system supports fine-grained control via three mechanisms:
 
@@ -205,7 +233,7 @@ Events:
   - Does NOT show cascading effects (e.g., shows "House: +$1M" but not "Cash: +$1M" from the transfer)
 - This gives at-a-glance visibility of one-time items without cluttering the main view
 
-### 2.7 Scenarios
+### 2.8 Scenarios
 
 **Scenarios** bundle overrides for comparison:
 
