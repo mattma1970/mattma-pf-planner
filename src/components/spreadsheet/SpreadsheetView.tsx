@@ -61,6 +61,7 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
   const years = forecast?.years ?? [];
   const [selectedTaxDetail, setSelectedTaxDetail] = useState<TaxDetailState | null>(null);
   const [isTaxExpanded, setIsTaxExpanded] = useState(false);
+  const [isCashflowExpanded, setIsCashflowExpanded] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -546,6 +547,142 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
               })}
             </>
           )}
+
+          {/* Account Analysis Section */}
+          <tr className="bg-cyan-50">
+            <th
+              colSpan={colSpan}
+              className="px-3 py-2 text-left font-semibold text-cyan-800 sticky left-0 bg-cyan-50"
+            >
+              <button
+                onClick={() => setIsCashflowExpanded(!isCashflowExpanded)}
+                className="flex items-center gap-2 hover:text-cyan-600"
+              >
+                <span className="text-gray-400">{isCashflowExpanded ? '▼' : '▶'}</span>
+                Account Analysis
+              </button>
+            </th>
+          </tr>
+          
+          {isCashflowExpanded && accounts.filter(a => a.type === 'asset').map((account) => {
+            const formatCurrency = (value: number) => new Intl.NumberFormat('en-AU', {
+              style: 'currency',
+              currency: 'AUD',
+              minimumFractionDigits: 0,
+              maximumFractionDigits: 0,
+            }).format(value);
+            
+            return (
+              <>
+                {/* Account header */}
+                <tr key={`cf-${account.id}-header`} className="bg-cyan-100/50">
+                  <td className="px-3 py-1.5 text-left text-cyan-800 font-medium sticky left-0 bg-cyan-100/50 border-r border-gray-200 min-w-48">
+                    {account.name}
+                  </td>
+                  {years.map((yearData) => (
+                    <td key={yearData.year} className="px-3 py-1.5 text-right text-xs text-gray-400">
+                      {yearData.year}
+                    </td>
+                  ))}
+                </tr>
+                
+                {/* Opening Balance */}
+                <tr key={`cf-${account.id}-open`} className="bg-white">
+                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
+                    Opening Balance
+                  </td>
+                  {years.map((yearData) => {
+                    const result = yearData.accounts.find(a => a.accountId === account.id);
+                    return (
+                      <td key={yearData.year} className="px-3 py-1 text-right text-sm text-gray-600">
+                        {result ? formatCurrency(result.startValue) : '-'}
+                      </td>
+                    );
+                  })}
+                </tr>
+                
+                {/* Contributions (inflows) */}
+                <tr key={`cf-${account.id}-contrib`} className="bg-white">
+                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
+                    + Contributions
+                  </td>
+                  {years.map((yearData) => {
+                    const result = yearData.accounts.find(a => a.accountId === account.id);
+                    const value = result?.contributions ?? 0;
+                    return (
+                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                        {value !== 0 ? formatCurrency(value) : '-'}
+                      </td>
+                    );
+                  })}
+                </tr>
+                
+                {/* Withdrawals (outflows) */}
+                <tr key={`cf-${account.id}-withdraw`} className="bg-white">
+                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
+                    − Withdrawals
+                  </td>
+                  {years.map((yearData) => {
+                    const result = yearData.accounts.find(a => a.accountId === account.id);
+                    const value = result?.withdrawals ?? 0;
+                    return (
+                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                        {value !== 0 ? formatCurrency(-value) : '-'}
+                      </td>
+                    );
+                  })}
+                </tr>
+                
+                {/* Transfers */}
+                <tr key={`cf-${account.id}-transfer`} className="bg-white">
+                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
+                    ± Transfers
+                  </td>
+                  {years.map((yearData) => {
+                    const result = yearData.accounts.find(a => a.accountId === account.id);
+                    const value = result?.transfers ?? 0;
+                    return (
+                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value > 0 ? 'text-green-600' : value < 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                        {value !== 0 ? formatCurrency(value) : '-'}
+                      </td>
+                    );
+                  })}
+                </tr>
+                
+                {/* Growth */}
+                <tr key={`cf-${account.id}-growth`} className="bg-white">
+                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
+                    + Growth
+                  </td>
+                  {years.map((yearData) => {
+                    const result = yearData.accounts.find(a => a.accountId === account.id);
+                    const value = result?.growth ?? 0;
+                    return (
+                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value > 0 ? 'text-blue-600' : value < 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                        {value !== 0 ? formatCurrency(value) : '-'}
+                      </td>
+                    );
+                  })}
+                </tr>
+                
+                {/* Closing Balance */}
+                <tr key={`cf-${account.id}-close`} className="bg-gray-50">
+                  <td className="px-3 py-1 text-left text-gray-800 text-sm font-medium sticky left-0 bg-gray-50 border-r border-gray-200 min-w-48 pl-6">
+                    = Closing Balance
+                  </td>
+                  {years.map((yearData) => {
+                    const result = yearData.accounts.find(a => a.accountId === account.id);
+                    const value = result?.endValue ?? 0;
+                    return (
+                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm font-medium ${value < 0 ? 'text-red-600' : 'text-gray-800'}`}>
+                        {formatCurrency(value)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              </>
+            );
+          })}
 
           <tr className="bg-gray-100">
             <th

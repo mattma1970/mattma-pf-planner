@@ -63,21 +63,7 @@ This document outlines the staged delivery plan for the Retirement Financial Pla
 
 ---
 
-## Phase 3: Multi-Person & Household View
-
-**Goal:** Support couples and combined forecasting
-
-| Feature | Description |
-|---------|-------------|
-| Multiple individuals | Each with own income, expenses, assets |
-| Individual views | Per-person forecast sections |
-| Combined view | Household-level aggregation |
-| Asset merging | Configure when/how assets combine |
-| Relationship modeling | Who owns what, joint assets |
-
----
-
-## Phase 4: Rule Engine & Advanced Super
+## Phase 3: Rule Engine & Advanced Super
 
 **Goal:** Configurable tax and regulatory rules
 
@@ -91,7 +77,7 @@ This document outlines the staged delivery plan for the Retirement Financial Pla
 
 ---
 
-## Phase 5: Scenarios & Stress Testing
+## Phase 4: Scenarios & Stress Testing
 
 **Goal:** Robust scenario analysis
 
@@ -105,7 +91,7 @@ This document outlines the staged delivery plan for the Retirement Financial Pla
 
 ---
 
-## Phase 6: Polish & Advanced Features
+## Phase 5: Polish & Advanced Features
 
 | Feature | Description |
 |---------|-------------|
@@ -123,7 +109,8 @@ This document outlines the staged delivery plan for the Retirement Financial Pla
 |-------|-------|-----------------|
 | 1 | Foundation (MVP) | Single-user spreadsheet view with configurable accounts |
 | 2 | Multi-Period & Basic Super | Epoch chaining, superannuation modeling |
-| 3 | Multi-Person | Couples support, household aggregation |
-| 4 | Rule Engine | Configurable tax and super rules |
-| 5 | Scenarios | Stress testing and comparisons |
-| 6 | Polish | Goal setting, exports, mobile support |
+| 3 | Rule Engine | Configurable tax and super rules |
+| 4 | Scenarios | Stress testing and comparisons |
+| 5 | Polish | Goal setting, exports, mobile support |
+
+> **Note:** Multi-person/household support was removed from the roadmap. Multiple people can be effectively modeled using separate accounts with appropriate naming conventions.
