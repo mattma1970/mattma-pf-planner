@@ -61,12 +61,15 @@ export function AccountRow({ account, years, onClick, isDraggable = false, event
         const value = accountResult?.endValue ?? 0;
         const descriptions = eventDescriptions?.get(yearData.year);
         const hasEvent = descriptions && descriptions.length > 0;
+        // Warn for negative balances on asset accounts (overdrawn)
+        const shouldWarnNegative = account.type === 'asset';
         return (
           <YearCell
             key={yearData.year}
             value={value}
             highlightColor={hasEvent ? highlightColor : undefined}
             tooltip={hasEvent ? descriptions.join('\n') : undefined}
+            warnNegative={shouldWarnNegative}
           />
         );
       })}

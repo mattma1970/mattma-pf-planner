@@ -1,7 +1,7 @@
 # Product Requirements Document: Retirement Financial Planner
 
 **Version:** 0.1 (Draft)  
-**Last Updated:** 2026-01-24  
+**Last Updated:** 2026-01-25  
 **Status:** In Development
 
 ---
@@ -86,6 +86,7 @@ This allows:
 - **Columns:** Years (horizontally scrolling)
 - **Sticky left column:** Account/item names remain fixed during horizontal scroll
 - **Single unified view:** All account types visible together (no separate tabs)
+- **Closing balances:** Asset and liability values represent **end-of-year (closing) balances** after all transactions for that year
 
 **Benefits:**
 - Users can trace exactly what happens each year across all accounts

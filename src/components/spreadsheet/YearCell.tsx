@@ -4,6 +4,7 @@ interface YearCellProps {
   isNegative?: boolean;
   highlightColor?: string;
   tooltip?: string;
+  warnNegative?: boolean;
 }
 
 const currencyFormatter = new Intl.NumberFormat('en-AU', {
@@ -13,15 +14,28 @@ const currencyFormatter = new Intl.NumberFormat('en-AU', {
   maximumFractionDigits: 0,
 });
 
-export function YearCell({ value, onClick, isNegative, highlightColor, tooltip }: YearCellProps) {
-  const colorClass = isNegative ?? value < 0 ? 'text-red-600' : 'text-gray-900';
+export function YearCell({ value, onClick, isNegative, highlightColor, tooltip, warnNegative }: YearCellProps) {
+  const isValueNegative = isNegative ?? value < 0;
+  const colorClass = isValueNegative ? 'text-red-600' : 'text-gray-900';
+  
+  // For warnNegative, show a subtle red background when value is negative
+  const showNegativeWarning = warnNegative && value < 0;
+  const bgStyle = showNegativeWarning 
+    ? { backgroundColor: '#fee2e2' } // red-100
+    : highlightColor 
+      ? { backgroundColor: highlightColor } 
+      : undefined;
+  
+  const warningTooltip = showNegativeWarning 
+    ? `⚠️ Negative balance (overdrawn)${tooltip ? '\n' + tooltip : ''}`
+    : tooltip;
 
   return (
     <td
-      className={`px-3 py-2 text-right whitespace-nowrap ${colorClass} ${onClick ? 'cursor-pointer hover:bg-gray-100' : ''} ${tooltip ? 'cursor-help' : ''}`}
-      style={highlightColor ? { backgroundColor: highlightColor } : undefined}
+      className={`px-3 py-2 text-right whitespace-nowrap ${colorClass} ${onClick ? 'cursor-pointer hover:bg-gray-100' : ''} ${warningTooltip ? 'cursor-help' : ''}`}
+      style={bgStyle}
       onClick={onClick}
-      title={tooltip}
+      title={warningTooltip}
     >
       {currencyFormatter.format(value)}
     </td>

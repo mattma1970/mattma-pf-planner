@@ -1,7 +1,7 @@
 # Architecture
 
 **Version:** 0.1 (Draft)  
-**Last Updated:** 2026-01-24
+**Last Updated:** 2026-01-25
 
 ---
 
@@ -91,11 +91,13 @@ Single source of truth for data shapes.
 // schemas/account.ts
 export const AccountTypeSchema = z.enum(['income', 'expense', 'asset', 'liability']);
 
+export const GrowthOperationSchema = z.enum(['add', 'subtract', 'multiply']);
+
 export const GrowthProfileSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('fixed'), rate: z.number() }),
-  z.object({ type: z.literal('cpiLinked'), offset: z.number() }),
-  z.object({ type: z.literal('increasing'), ratePerYear: z.number() }),
-  z.object({ type: z.literal('decreasing'), ratePerYear: z.number() }),
+  z.object({ type: z.literal('cpiLinked'), operation: GrowthOperationSchema, value: z.number() }),
+  z.object({ type: z.literal('increasing'), rate: z.number(), changePerYear: z.number() }),
+  z.object({ type: z.literal('decreasing'), rate: z.number(), changePerYear: z.number() }),
 ]);
 
 export const AccountSchema = z.object({
@@ -105,10 +107,14 @@ export const AccountSchema = z.object({
   owner: z.string().optional(),          // Person ID, or undefined for joint
   initialValue: z.number(),
   growthProfile: GrowthProfileSchema,
-  startYear: z.number().int().optional(),
-  endYear: z.number().int().optional(),
-  endBehavior: z.enum(['zero', 'transfer', 'hold']).optional(),
+  startCondition: AccountConditionSchema.optional(),
+  endCondition: AccountConditionSchema.optional(),
+  endBehavior: z.enum(['zero', 'transfer', 'hold', 'sell']).optional(),
   transferToAccountId: z.string().uuid().optional(),
+  // Tax and CGT fields
+  taxClassification: TaxClassificationSchema.optional(),
+  costBase: z.number().optional(),
+  acquisitionYear: z.number().int().optional(),
 });
 
 export type Account = z.infer<typeof AccountSchema>;

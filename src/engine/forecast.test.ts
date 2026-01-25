@@ -431,4 +431,84 @@ describe('calculateForecast', () => {
       expect(year2025.taxAggregations[0].calculatedTax).toBe(year2025.taxPayable);
     });
   });
+
+  describe('growth calculation method', () => {
+    it('uses opening balance method by default', () => {
+      const bankAccount: Account = {
+        id: 'bank-1111-1111-1111-111111111111',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0.10 }, // 10% for easy math
+      };
+
+      const houseAccount: Account = {
+        id: 'house-1111-1111-1111-111111111111',
+        name: 'House',
+        type: 'asset',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0.05 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'transfer',
+        transferToAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, houseAccount],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: { ...testSettings, growthCalculationMethod: 'openingBalance' },
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const bank2025 = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      
+      // Opening balance method: growth on $100k only, then add $500k
+      // Growth = $100k * 0.10 = $10k
+      // End = $100k + $10k + $500k = $610k
+      expect(bank2025.growth).toBeCloseTo(10000, 2);
+      expect(bank2025.endValue).toBeCloseTo(610000, 2);
+    });
+
+    it('uses average balance method when configured', () => {
+      const bankAccount: Account = {
+        id: 'bank-1111-1111-1111-111111111111',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0.10 }, // 10% for easy math
+      };
+
+      const houseAccount: Account = {
+        id: 'house-1111-1111-1111-111111111111',
+        name: 'House',
+        type: 'asset',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0.05 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'transfer',
+        transferToAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, houseAccount],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: { ...testSettings, growthCalculationMethod: 'averageBalance' },
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const bank2025 = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      
+      // Average balance method: growth on ($100k + 0.5 * $500k) = $350k
+      // Growth = $350k * 0.10 = $35k
+      // End = $350k + growth + other half of transfer = $350k + $35k + $250k = $635k
+      expect(bank2025.growth).toBeCloseTo(35000, 2);
+      expect(bank2025.endValue).toBeCloseTo(635000, 2);
+    });
+  });
 });

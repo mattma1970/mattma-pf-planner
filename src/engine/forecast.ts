@@ -13,9 +13,17 @@ import type {
   TaxAggregation,
   TaxSchedule,
 } from '../schemas';
-import { calculateIncomeTax } from './tax';
+import { calculateIncomeTax, calculateCapitalGain, type CgtCalculationResult } from './tax';
 import { resolveAssumptionForYear } from './assumptions';
-import { isAccountActive, projectAccountValue, handleAccountTransfer } from './accounts';
+import { isAccountActive, projectAccountValue, handleAccountTransfer, getAccountAcquisitionYear } from './accounts';
+
+interface PendingCgtEvent {
+  accountId: string;
+  accountName: string;
+  cgtResult: CgtCalculationResult;
+  fundedFromAccountId: string;
+  fundedFromAccountName: string;
+}
 
 export interface ForecastInput {
   accounts: Account[];
@@ -27,6 +35,14 @@ export interface ForecastInput {
   endYear: number;
 }
 
+/**
+ * Transaction ordering per year:
+ * 1. Carry opening balances (from previous year's closing)
+ * 2. Account lifecycle moves (sell/transfer from endBehavior) - makes proceeds available
+ * 3. User transfer events (explicit transfers between accounts)
+ * 4. Apply growth (on balance after steps 1-3, skip if balance <= 0)
+ * 5. Derived flows (income deposits, expense withdrawals, asset funding, tax)
+ */
 export function calculateForecast(input: ForecastInput): ForecastResult {
   const { accounts, assumptions, events, persons, settings, startYear, endYear } = input;
 
@@ -48,41 +64,29 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     let totalExpenses = 0;
 
     const yearEvents = events.filter((e) => e.year === year);
-
-    const pendingFlows: { accountId: string; amount: number; type: 'contribution' | 'withdrawal' }[] = [];
+    const pendingCgtEvents: PendingCgtEvent[] = [];
     const accountResults = new Map<string, AccountYearResult>();
+    
+    // Track per-account income for itemized tax events
+    const incomeByAccount: { accountId: string; accountName: string; amount: number; fundedFromAccountId?: string }[] = [];
 
-    const getAccountOpeningValue = (accountId: string): number => {
-      const account = accounts.find((a) => a.id === accountId);
-      if (!account) return 0;
-      const isFirstActive = !accountStartYears.has(accountId) && isAccountActive(account, year, persons);
-      if (isFirstActive) {
-        return account.initialValue;
-      }
-      return accountValues.get(accountId) ?? account.initialValue;
-    };
-
-    const startOfYearTransfers = new Map<string, number>();
-    for (const event of yearEvents) {
-      if (event.type === 'transfer' && event.sourceAccountId && event.targetAccountId) {
-        const transferAmount = event.transferAll
-          ? getAccountOpeningValue(event.sourceAccountId)
-          : event.amount;
-        
-        startOfYearTransfers.set(
-          event.sourceAccountId,
-          (startOfYearTransfers.get(event.sourceAccountId) ?? 0) - transferAmount
-        );
-        startOfYearTransfers.set(
-          event.targetAccountId,
-          (startOfYearTransfers.get(event.targetAccountId) ?? 0) + transferAmount
-        );
-      }
-    }
+    // ===========================================
+    // PHASE 1: Calculate opening balances and identify lifecycle transfers
+    // ===========================================
+    
+    // First pass: determine which accounts are ending and their transfer amounts
+    const lifecycleTransfers: { 
+      sourceId: string; 
+      destinationId: string; 
+      amount: number;
+      endBehavior: 'transfer' | 'sell';
+      account: Account;
+    }[] = [];
 
     for (const account of accounts) {
       const isActive = isAccountActive(account, year, persons);
       const isFirstActiveYear = !accountStartYears.has(account.id) && isActive;
+      
       if (isFirstActiveYear) {
         accountStartYears.set(account.id, year);
       }
@@ -91,50 +95,202 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         ? account.initialValue
         : (accountValues.get(account.id) ?? account.initialValue);
 
-      const transferAmount = startOfYearTransfers.get(account.id) ?? 0;
-      const transferredAllOut = transferAmount < 0 && openingValue + transferAmount <= 0;
-      const startValue = transferredAllOut ? 0 : openingValue + transferAmount;
+      // Check if this account ends this year with a transfer/sell
+      if (isActive) {
+        const transfer = handleAccountTransfer(account, year, persons, openingValue);
+        if (transfer.isTransferYear && transfer.destinationId && transfer.endBehavior) {
+          lifecycleTransfers.push({
+            sourceId: account.id,
+            destinationId: transfer.destinationId,
+            amount: transfer.amount,
+            endBehavior: transfer.endBehavior,
+            account,
+          });
+        }
+      }
+    }
+
+    // ===========================================
+    // PHASE 2: Apply lifecycle transfers (sell/transfer from endBehavior)
+    // These happen FIRST so proceeds are available for user transfers
+    // ===========================================
+    
+    const lifecycleFlows = new Map<string, number>(); // accountId -> net change from lifecycle events
+    
+    for (const transfer of lifecycleTransfers) {
+      // Source account loses its value
+      lifecycleFlows.set(
+        transfer.sourceId,
+        (lifecycleFlows.get(transfer.sourceId) ?? 0) - transfer.amount
+      );
+      
+      // Destination account gains the value
+      lifecycleFlows.set(
+        transfer.destinationId,
+        (lifecycleFlows.get(transfer.destinationId) ?? 0) + transfer.amount
+      );
+
+      // Handle CGT for sell behavior
+      if (transfer.endBehavior === 'sell') {
+        const account = transfer.account;
+        const costBase = account.costBase ?? account.initialValue;
+        const acquisitionYear = getAccountAcquisitionYear(account, persons);
+        const eligibleForDiscount = account.eligibleForCgtDiscount ?? true;
+        
+        const cgtResult = calculateCapitalGain(
+          transfer.amount,
+          costBase,
+          acquisitionYear,
+          year,
+          eligibleForDiscount
+        );
+        
+        const fundingAccountId = account.taxFundedFromAccountId ?? settings.defaultTaxFundingAccountId ?? 'unassigned';
+        const fundingAccount = accounts.find(a => a.id === fundingAccountId);
+        
+        pendingCgtEvents.push({
+          accountId: account.id,
+          accountName: account.name,
+          cgtResult,
+          fundedFromAccountId: fundingAccountId,
+          fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
+        });
+      }
+    }
+
+    // ===========================================
+    // PHASE 3: Apply user transfer events
+    // These happen AFTER lifecycle transfers, so proceeds are available
+    // ===========================================
+    
+    const userTransferFlows = new Map<string, number>(); // accountId -> net change from user transfers
+    
+    for (const event of yearEvents) {
+      if (event.type === 'transfer' && event.sourceAccountId && event.targetAccountId) {
+        // For transferAll, we need to calculate the balance at this point
+        // (opening + lifecycle flows)
+        let transferAmount = event.amount;
+        if (event.transferAll) {
+          const sourceAccount = accounts.find(a => a.id === event.sourceAccountId);
+          if (sourceAccount) {
+            const isFirstActive = !accountStartYears.has(event.sourceAccountId) && isAccountActive(sourceAccount, year, persons);
+            const openingValue = isFirstActive
+              ? sourceAccount.initialValue
+              : (accountValues.get(event.sourceAccountId) ?? sourceAccount.initialValue);
+            const lifecycleChange = lifecycleFlows.get(event.sourceAccountId) ?? 0;
+            transferAmount = openingValue + lifecycleChange;
+          }
+        }
+        
+        userTransferFlows.set(
+          event.sourceAccountId,
+          (userTransferFlows.get(event.sourceAccountId) ?? 0) - transferAmount
+        );
+        userTransferFlows.set(
+          event.targetAccountId,
+          (userTransferFlows.get(event.targetAccountId) ?? 0) + transferAmount
+        );
+      }
+    }
+
+    // ===========================================
+    // PHASE 4 & 5: Process each account - apply growth and derived flows
+    // ===========================================
+    
+    const derivedFlows: { accountId: string; amount: number; type: 'contribution' | 'withdrawal' }[] = [];
+
+    for (const account of accounts) {
+      const isActive = isAccountActive(account, year, persons);
+      const isFirstActiveYear = accountStartYears.get(account.id) === year;
+      const isLifecycleEnding = lifecycleTransfers.some(t => t.sourceId === account.id);
+
+      const openingValue = isFirstActiveYear
+        ? account.initialValue
+        : (accountValues.get(account.id) ?? account.initialValue);
+
+      // Get flow amounts
+      const lifecycleChange = lifecycleFlows.get(account.id) ?? 0;
+      const userTransferChange = userTransferFlows.get(account.id) ?? 0;
 
       let growth = 0;
-      let projectedValue = startValue;
+      let projectedValue = openingValue;
       let contributions = 0;
       let withdrawals = 0;
-      let transfers = transferAmount;
-      let endValue = startValue;
+      let transfers = 0;
+      let endValue = openingValue;
+      
+      // Track lifecycle transfers: outflows as transfers, inflows as contributions
+      const lifecycleContribution = Math.max(0, lifecycleChange);
+      if (lifecycleChange < 0) {
+        transfers = lifecycleChange; // Outflow (source account)
+      } else if (lifecycleChange > 0) {
+        contributions = lifecycleChange; // Inflow (destination account) - for reporting
+      }
+      
+      // Track user transfers as transfers (both in and out)
+      transfers += userTransferChange;
 
-      if (isActive && !transferredAllOut) {
-        const yearsSinceStart = year - (accountStartYears.get(account.id) ?? year) + 1;
-        projectedValue = projectAccountValue(account, year, startValue, resolvedAssumptions, yearsSinceStart);
-        growth = projectedValue - startValue;
+      if (isActive && !isLifecycleEnding) {
+        // Calculate balance for growth based on settings.growthCalculationMethod
+        const totalTransfers = lifecycleChange + userTransferChange;
+        let balanceForGrowth: number;
+        
+        if (settings.growthCalculationMethod === 'averageBalance') {
+          // Average balance: opening + 0.5 * all transfers (assumes mid-year transactions)
+          balanceForGrowth = openingValue + 0.5 * totalTransfers;
+        } else {
+          // Opening balance (default): opening + lifecycle outflows only (inflows added after growth)
+          balanceForGrowth = openingValue + Math.min(0, lifecycleChange) + userTransferChange;
+        }
+        
+        // PHASE 4: Apply growth (only if balance > 0)
+        if (balanceForGrowth > 0) {
+          const yearsSinceStart = year - (accountStartYears.get(account.id) ?? year) + 1;
+          projectedValue = projectAccountValue(account, year, balanceForGrowth, resolvedAssumptions, yearsSinceStart);
+          growth = projectedValue - balanceForGrowth;
+        } else {
+          // No growth on zero or negative balances
+          projectedValue = balanceForGrowth;
+          growth = 0;
+        }
+        
+        // Add remaining transfer amounts not included in growth base
+        if (settings.growthCalculationMethod === 'averageBalance') {
+          // For average balance, the full transfer is already factored in via 0.5 multiplier
+          // Add the other half that wasn't in the growth base
+          projectedValue += 0.5 * totalTransfers;
+        } else {
+          // For opening balance method, add lifecycle inflows after growth
+          projectedValue += lifecycleContribution;
+        }
 
+        // Process non-transfer events (contributions/withdrawals) - don't add to contributions again
+        let eventContributions = 0;
+        let eventWithdrawals = 0;
         for (const event of yearEvents) {
           if (event.affectedAccountId === account.id) {
             if (event.type === 'income' || event.type === 'assetChange') {
-              contributions += event.amount;
+              eventContributions += event.amount;
             } else if (event.type === 'expense' || event.type === 'liabilityChange') {
-              withdrawals += event.amount;
+              eventWithdrawals += event.amount;
             }
           }
         }
+        contributions += eventContributions;
+        withdrawals += eventWithdrawals;
 
-        const transfer = handleAccountTransfer(account, year, persons, projectedValue + contributions - withdrawals);
-        if (transfer.isTransferYear && transfer.destinationId) {
-          transfers += -transfer.amount;
-          endValue = 0;
-          pendingFlows.push({ accountId: transfer.destinationId, amount: transfer.amount, type: 'contribution' });
-        } else {
-          endValue = projectedValue + contributions - withdrawals;
-        }
+        endValue = projectedValue + eventContributions - eventWithdrawals;
 
+        // PHASE 5: Derived flows
         if (account.type === 'income' && account.depositsToAccountId) {
-          pendingFlows.push({ accountId: account.depositsToAccountId, amount: projectedValue, type: 'contribution' });
+          derivedFlows.push({ accountId: account.depositsToAccountId, amount: projectedValue, type: 'contribution' });
         }
         if (account.type === 'expense' && account.fundedByAccountId) {
-          pendingFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal' });
+          derivedFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal' });
         }
-        if (account.type === 'asset' && account.returnRate && account.incomeTargetAccountId && startValue > 0) {
-          const incomeGenerated = startValue * (account.returnRate / 100);
-          pendingFlows.push({ accountId: account.incomeTargetAccountId, amount: incomeGenerated, type: 'contribution' });
+        if (account.type === 'asset' && account.returnRate && account.incomeTargetAccountId && balanceForGrowth > 0) {
+          const incomeGenerated = balanceForGrowth * (account.returnRate / 100);
+          derivedFlows.push({ accountId: account.incomeTargetAccountId, amount: incomeGenerated, type: 'contribution' });
         }
         if (account.type === 'asset' && account.fundedByAccountId) {
           let fundingAmount = contributions - withdrawals + growth;
@@ -142,23 +298,28 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             fundingAmount += account.initialValue;
           }
           if (fundingAmount > 0) {
-            pendingFlows.push({ accountId: account.fundedByAccountId, amount: fundingAmount, type: 'withdrawal' });
+            derivedFlows.push({ accountId: account.fundedByAccountId, amount: fundingAmount, type: 'withdrawal' });
           }
         }
+      } else if (isLifecycleEnding) {
+        // Account ended this year - value is zero
+        endValue = 0;
+        projectedValue = 0;
       } else if (!isActive) {
+        // Account not active
         if (account.endBehavior === 'hold') {
-          endValue = startValue;
-          projectedValue = startValue;
+          endValue = openingValue;
+          projectedValue = openingValue;
         } else {
           endValue = 0;
           projectedValue = 0;
         }
 
         if (account.type === 'income' && account.depositsToAccountId && account.endBehavior === 'hold') {
-          pendingFlows.push({ accountId: account.depositsToAccountId, amount: projectedValue, type: 'contribution' });
+          derivedFlows.push({ accountId: account.depositsToAccountId, amount: projectedValue, type: 'contribution' });
         }
         if (account.type === 'expense' && account.fundedByAccountId && account.endBehavior === 'hold') {
-          pendingFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal' });
+          derivedFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal' });
         }
       }
 
@@ -166,6 +327,15 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
 
       if (account.type === 'income') {
         totalIncome += projectedValue;
+        // Track income per account for itemized tax events (skip tax-free income)
+        if (projectedValue > 0 && account.incomeTaxTreatment !== 'taxFree') {
+          incomeByAccount.push({
+            accountId: account.id,
+            accountName: account.name,
+            amount: projectedValue,
+            fundedFromAccountId: account.taxFundedFromAccountId,
+          });
+        }
       } else if (account.type === 'expense') {
         totalExpenses += projectedValue;
       }
@@ -182,6 +352,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       });
     }
 
+    // Handle events without affected accounts
     for (const event of yearEvents) {
       if (!event.affectedAccountId && !event.sourceAccountId) {
         if (event.type === 'income') {
@@ -192,7 +363,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       }
     }
 
-    for (const flow of pendingFlows) {
+    // Apply derived flows
+    for (const flow of derivedFlows) {
       const result = accountResults.get(flow.accountId);
       if (result) {
         if (flow.type === 'contribution') {
@@ -206,6 +378,10 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       }
     }
 
+    // ===========================================
+    // PHASE 6: Tax calculations
+    // ===========================================
+    
     const taxEvents: TaxEvent[] = [];
     
     const defaultFundingAccountId = settings.defaultTaxFundingAccountId ?? 'unassigned';
@@ -213,18 +389,68 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       ? accounts.find(a => a.id === settings.defaultTaxFundingAccountId) 
       : undefined;
 
-    if (totalIncome > 0) {
+    // Generate per-account income tax events
+    for (const income of incomeByAccount) {
+      const fundingAccountId = income.fundedFromAccountId ?? defaultFundingAccountId;
+      const fundingAccount = income.fundedFromAccountId
+        ? accounts.find(a => a.id === income.fundedFromAccountId)
+        : defaultFundingAccount;
+      
       taxEvents.push({
         id: uuidv4(),
         year,
         type: 'incomeTax',
-        description: 'Income Tax',
-        assessableAmount: totalIncome,
-        fundedFromAccountId: defaultFundingAccountId,
-        fundedFromAccountName: defaultFundingAccount?.name ?? 'Not configured',
+        description: income.accountName,
+        sourceAccountId: income.accountId,
+        sourceAccountName: income.accountName,
+        assessableAmount: income.amount,
+        fundedFromAccountId: fundingAccountId,
+        fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
       });
     }
 
+    // Generate tax deduction events from events with taxTreatmentType: 'taxDeduction'
+    for (const event of yearEvents) {
+      if (event.taxTreatmentType === 'taxDeduction' && event.amount > 0) {
+        const fundingAccountId = event.taxFundedFromAccountId ?? defaultFundingAccountId;
+        const fundingAccount = event.taxFundedFromAccountId
+          ? accounts.find(a => a.id === event.taxFundedFromAccountId)
+          : defaultFundingAccount;
+        
+        taxEvents.push({
+          id: uuidv4(),
+          year,
+          type: 'taxDeduction',
+          description: event.description,
+          assessableAmount: -event.amount, // Negative to reduce taxable income
+          fundedFromAccountId: fundingAccountId,
+          fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
+        });
+      }
+    }
+
+    // Add CGT events
+    for (const cgtEvent of pendingCgtEvents) {
+      if (cgtEvent.cgtResult.discountedGain > 0) {
+        taxEvents.push({
+          id: uuidv4(),
+          year,
+          type: 'capitalGainsTax',
+          description: `CGT: ${cgtEvent.accountName}`,
+          sourceAccountId: cgtEvent.accountId,
+          sourceAccountName: cgtEvent.accountName,
+          assessableAmount: cgtEvent.cgtResult.discountedGain,
+          fundedFromAccountId: cgtEvent.fundedFromAccountId,
+          fundedFromAccountName: cgtEvent.fundedFromAccountName,
+          grossCapitalGain: cgtEvent.cgtResult.grossCapitalGain,
+          discountApplied: cgtEvent.cgtResult.discountApplied,
+          costBase: cgtEvent.cgtResult.costBase,
+          saleProceeds: cgtEvent.cgtResult.saleProceeds,
+        });
+      }
+    }
+
+    // Aggregate tax by funding account
     const aggregationMap = new Map<string, { 
       fundedFromAccountName: string;
       taxSchedule: TaxSchedule;
@@ -272,6 +498,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
 
       taxPayable += calculatedTax;
 
+      // Deduct tax from funding account
       if (fundedFromAccountId !== 'unassigned') {
         const fundingResult = accountResults.get(fundedFromAccountId);
         if (fundingResult) {

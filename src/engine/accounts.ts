@@ -64,8 +64,19 @@ function calculateGrowthRate(
     case 'fixed':
       return profile.rate;
 
-    case 'cpiLinked':
-      return assumptions.cpi + (profile.offset ?? 0);
+    case 'cpiLinked': {
+      const value = profile.value ?? 0;
+      switch (profile.operation) {
+        case 'add':
+          return assumptions.cpi + value;
+        case 'subtract':
+          return assumptions.cpi - value;
+        case 'multiply':
+          return assumptions.cpi * value;
+        default:
+          return assumptions.cpi + value;
+      }
+    }
 
     case 'increasing':
       return profile.rate + (profile.changePerYear ?? 0.005) * (yearsSinceStart - 1);
@@ -82,6 +93,7 @@ export interface TransferResult {
   isTransferYear: boolean;
   amount: number;
   destinationId?: string;
+  endBehavior?: 'transfer' | 'sell';
 }
 
 export function handleAccountTransfer(
@@ -90,7 +102,11 @@ export function handleAccountTransfer(
   persons: Person[],
   currentValue: number
 ): TransferResult {
-  if (!account.endCondition || account.endBehavior !== 'transfer' || !account.transferToAccountId) {
+  if (!account.endCondition || !account.transferToAccountId) {
+    return { isTransferYear: false, amount: 0 };
+  }
+
+  if (account.endBehavior !== 'transfer' && account.endBehavior !== 'sell') {
     return { isTransferYear: false, amount: 0 };
   }
 
@@ -105,5 +121,25 @@ export function handleAccountTransfer(
     isTransferYear: true,
     amount: currentValue,
     destinationId: account.transferToAccountId,
+    endBehavior: account.endBehavior,
   };
+}
+
+export function getAccountEndYear(account: Account, persons: Person[]): number | undefined {
+  if (!account.endCondition) {
+    return undefined;
+  }
+  const owner = persons.find((p) => p.id === account.owner);
+  return conditionToYear(account.endCondition, owner);
+}
+
+export function getAccountAcquisitionYear(account: Account, persons: Person[]): number {
+  if (account.acquisitionYear) {
+    return account.acquisitionYear;
+  }
+  if (account.startCondition) {
+    const owner = persons.find((p) => p.id === account.owner);
+    return conditionToYear(account.startCondition, owner);
+  }
+  return new Date().getFullYear();
 }

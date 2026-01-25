@@ -13,6 +13,9 @@ const TAX_BRACKETS_2024_25: TaxBracket[] = [
   { min: 190001, max: Infinity, rate: 0.45, baseTax: 55367 },
 ];
 
+const CGT_DISCOUNT_PERCENTAGE = 0.5;
+const CGT_MIN_HOLDING_YEARS = 1;
+
 function getTaxBrackets(_year: number): TaxBracket[] {
   return TAX_BRACKETS_2024_25;
 }
@@ -34,4 +37,37 @@ export function calculateIncomeTax(income: number, year: number): number {
   const topBracket = brackets[brackets.length - 1];
   const taxableInBracket = income - topBracket.min + 1;
   return topBracket.baseTax + taxableInBracket * topBracket.rate;
+}
+
+export interface CgtCalculationResult {
+  grossCapitalGain: number;
+  discountApplied: boolean;
+  discountedGain: number;
+  costBase: number;
+  saleProceeds: number;
+}
+
+export function calculateCapitalGain(
+  saleProceeds: number,
+  costBase: number,
+  acquisitionYear: number,
+  saleYear: number,
+  eligibleForDiscount: boolean = true
+): CgtCalculationResult {
+  const grossCapitalGain = Math.max(0, saleProceeds - costBase);
+  
+  const holdingYears = saleYear - acquisitionYear;
+  const discountApplied = eligibleForDiscount && holdingYears >= CGT_MIN_HOLDING_YEARS && grossCapitalGain > 0;
+  
+  const discountedGain = discountApplied 
+    ? grossCapitalGain * (1 - CGT_DISCOUNT_PERCENTAGE)
+    : grossCapitalGain;
+
+  return {
+    grossCapitalGain,
+    discountApplied,
+    discountedGain,
+    costBase,
+    saleProceeds,
+  };
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calculateIncomeTax } from './tax';
+import { calculateIncomeTax, calculateCapitalGain } from './tax';
 
 describe('calculateIncomeTax', () => {
   const year = 2024;
@@ -49,5 +49,59 @@ describe('calculateIncomeTax', () => {
     const income = 500000;
     const expected = 55367 + (500000 - 190001 + 1) * 0.45;
     expect(calculateIncomeTax(income, year)).toBe(expected);
+  });
+});
+
+describe('calculateCapitalGain', () => {
+  it('calculates gross capital gain correctly', () => {
+    const result = calculateCapitalGain(200000, 100000, 2020, 2025);
+    expect(result.grossCapitalGain).toBe(100000);
+    expect(result.costBase).toBe(100000);
+    expect(result.saleProceeds).toBe(200000);
+  });
+
+  it('applies 50% CGT discount when held for more than 1 year', () => {
+    const result = calculateCapitalGain(200000, 100000, 2020, 2025);
+    expect(result.discountApplied).toBe(true);
+    expect(result.discountedGain).toBe(50000);
+  });
+
+  it('does not apply CGT discount when held for exactly 1 year', () => {
+    const result = calculateCapitalGain(200000, 100000, 2024, 2025);
+    expect(result.discountApplied).toBe(true);
+    expect(result.discountedGain).toBe(50000);
+  });
+
+  it('does not apply CGT discount when held for less than 1 year', () => {
+    const result = calculateCapitalGain(200000, 100000, 2025, 2025);
+    expect(result.discountApplied).toBe(false);
+    expect(result.discountedGain).toBe(100000);
+  });
+
+  it('does not apply CGT discount when eligibleForDiscount is false', () => {
+    const result = calculateCapitalGain(200000, 100000, 2020, 2025, false);
+    expect(result.discountApplied).toBe(false);
+    expect(result.discountedGain).toBe(100000);
+  });
+
+  it('returns zero capital gain when sale price equals cost base', () => {
+    const result = calculateCapitalGain(100000, 100000, 2020, 2025);
+    expect(result.grossCapitalGain).toBe(0);
+    expect(result.discountedGain).toBe(0);
+    expect(result.discountApplied).toBe(false);
+  });
+
+  it('returns zero capital gain when sale price is less than cost base (loss)', () => {
+    const result = calculateCapitalGain(80000, 100000, 2020, 2025);
+    expect(result.grossCapitalGain).toBe(0);
+    expect(result.discountedGain).toBe(0);
+    expect(result.discountApplied).toBe(false);
+  });
+
+  it('handles large capital gains correctly', () => {
+    const result = calculateCapitalGain(2000000, 500000, 2015, 2025);
+    expect(result.grossCapitalGain).toBe(1500000);
+    expect(result.discountApplied).toBe(true);
+    expect(result.discountedGain).toBe(750000);
   });
 });

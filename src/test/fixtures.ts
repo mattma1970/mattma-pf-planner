@@ -32,7 +32,7 @@ export const sampleAccounts: Account[] = [
     type: 'expense',
     owner: '11111111-1111-1111-1111-111111111111',
     initialValue: 50000,
-    growthProfile: { type: 'cpiLinked', offset: 0.005 },
+    growthProfile: { type: 'cpiLinked', operation: 'add', value: 0.005 },
   },
   {
     id: 'aaaa3333-3333-3333-3333-333333333333',

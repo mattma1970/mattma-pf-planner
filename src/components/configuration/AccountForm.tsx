@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button, Input, Select } from '../ui';
-import type { Account, GrowthProfile, AccountCondition, EndBehavior, LiquidityType } from '../../schemas/account';
+import type { Account, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation } from '../../schemas/account';
 
 interface AccountFormProps {
   account?: Account;
@@ -17,9 +17,18 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
   const [growthRate, setGrowthRate] = useState(() => {
     const gp = account?.growthProfile;
     if (gp?.type === 'fixed') return gp.rate.toString();
-    if (gp?.type === 'cpiLinked') return gp.offset.toString();
     if (gp?.type === 'increasing') return gp.rate.toString();
     if (gp?.type === 'decreasing') return gp.rate.toString();
+    return '0';
+  });
+  const [cpiOperation, setCpiOperation] = useState<GrowthOperation>(() => {
+    const gp = account?.growthProfile;
+    if (gp?.type === 'cpiLinked') return gp.operation ?? 'add';
+    return 'add';
+  });
+  const [cpiValue, setCpiValue] = useState(() => {
+    const gp = account?.growthProfile;
+    if (gp?.type === 'cpiLinked') return gp.value?.toString() ?? '0';
     return '0';
   });
   const [changePerYear, setChangePerYear] = useState(() => {
@@ -69,6 +78,15 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
   const [incomeTargetAccountId, setIncomeTargetAccountId] = useState(account?.incomeTargetAccountId ?? '');
   const [liquidityType, setLiquidityType] = useState<LiquidityType | ''>(account?.liquidityType ?? '');
 
+  // Tax settings
+  const [incomeTaxTreatment, setIncomeTaxTreatment] = useState<IncomeTaxTreatment | ''>(account?.incomeTaxTreatment ?? '');
+  const [taxFundedFromAccountId, setTaxFundedFromAccountId] = useState(account?.taxFundedFromAccountId ?? '');
+  
+  // CGT settings for assets with endBehavior: 'sell'
+  const [costBase, setCostBase] = useState(account?.costBase?.toString() ?? '');
+  const [acquisitionYear, setAcquisitionYear] = useState(account?.acquisitionYear?.toString() ?? '');
+  const [eligibleForCgtDiscount, setEligibleForCgtDiscount] = useState(account?.eligibleForCgtDiscount ?? true);
+
   const otherAccounts = accounts.filter((a) => a.id !== account?.id);
   const assetAccounts = accounts.filter((a) => a.type === 'asset' && a.id !== account?.id);
 
@@ -78,11 +96,12 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
     const growthProfile: GrowthProfile = (() => {
       const rate = parseFloat(growthRate) || 0;
       const change = parseFloat(changePerYear) || 0;
+      const cpiVal = parseFloat(cpiValue) || 0;
       switch (growthType) {
         case 'fixed':
           return { type: 'fixed' as const, rate };
         case 'cpiLinked':
-          return { type: 'cpiLinked' as const, offset: rate };
+          return { type: 'cpiLinked' as const, operation: cpiOperation, value: cpiVal };
         case 'increasing':
           return { type: 'increasing' as const, rate, changePerYear: change };
         case 'decreasing':
@@ -114,6 +133,8 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
       };
     })();
 
+    const isSellBehavior = endBehavior === 'sell';
+    
     onSubmit({
       name,
       type,
@@ -125,9 +146,18 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
       startCondition,
       endCondition,
       endBehavior: endCondition ? endBehavior : undefined,
-      transferToAccountId: endBehavior === 'transfer' ? transferToAccountId : undefined,
+      transferToAccountId: (endBehavior === 'transfer' || endBehavior === 'sell') ? transferToAccountId : undefined,
       depositsToAccountId: type === 'income' && depositsToAccountId ? depositsToAccountId : undefined,
       fundedByAccountId: (type === 'expense' || type === 'asset') && fundedByAccountId ? fundedByAccountId : undefined,
+      
+      // Tax settings
+      incomeTaxTreatment: type === 'income' && incomeTaxTreatment ? incomeTaxTreatment : undefined,
+      taxFundedFromAccountId: taxFundedFromAccountId || undefined,
+      
+      // CGT settings (for assets with sell behavior)
+      costBase: type === 'asset' && isSellBehavior && costBase ? parseFloat(costBase) : undefined,
+      acquisitionYear: type === 'asset' && isSellBehavior && acquisitionYear ? parseInt(acquisitionYear) : undefined,
+      eligibleForCgtDiscount: type === 'asset' && isSellBehavior ? eligibleForCgtDiscount : undefined,
     });
   };
 
@@ -152,16 +182,27 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
       </Select>
 
       {type === 'income' && (
-        <Select
-          label="Deposits To"
-          value={depositsToAccountId}
-          onChange={(e) => setDepositsToAccountId(e.target.value)}
-        >
-          <option value="">None</option>
-          {assetAccounts.map((a) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </Select>
+        <>
+          <Select
+            label="Deposits To"
+            value={depositsToAccountId}
+            onChange={(e) => setDepositsToAccountId(e.target.value)}
+          >
+            <option value="">None</option>
+            {assetAccounts.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </Select>
+          <Select
+            label="Tax Treatment"
+            value={incomeTaxTreatment}
+            onChange={(e) => setIncomeTaxTreatment(e.target.value as IncomeTaxTreatment | '')}
+          >
+            <option value="">Taxable (default)</option>
+            <option value="taxable">Taxable</option>
+            <option value="taxFree">Tax Free</option>
+          </Select>
+        </>
       )}
 
       {(type === 'expense' || type === 'asset') && (
@@ -198,25 +239,71 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
 
       <div className="border-t pt-4">
         <h3 className="text-sm font-medium text-gray-700 mb-2">Growth Profile</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <Select
-            label="Growth Type"
-            value={growthType}
-            onChange={(e) => setGrowthType(e.target.value as GrowthProfile['type'])}
-          >
-            <option value="fixed">Fixed Rate</option>
-            <option value="cpiLinked">CPI Linked</option>
-            <option value="increasing">Increasing Rate</option>
-            <option value="decreasing">Decreasing Rate</option>
-          </Select>
-          <Input
-            label={growthType === 'cpiLinked' ? 'CPI Offset (%)' : 'Rate (%)'}
-            type="number"
-            step="0.1"
-            value={growthRate}
-            onChange={(e) => setGrowthRate(e.target.value)}
-          />
-          {(growthType === 'increasing' || growthType === 'decreasing') && (
+        <Select
+          label="Growth Type"
+          value={growthType}
+          onChange={(e) => setGrowthType(e.target.value as GrowthProfile['type'])}
+        >
+          <option value="fixed">Fixed Rate</option>
+          <option value="cpiLinked">CPI Based</option>
+          <option value="increasing">Increasing Rate</option>
+          <option value="decreasing">Decreasing Rate</option>
+        </Select>
+
+        {growthType === 'fixed' && (
+          <div className="mt-3">
+            <Input
+              label="Rate (%)"
+              type="number"
+              step="0.1"
+              value={growthRate}
+              onChange={(e) => setGrowthRate(e.target.value)}
+            />
+          </div>
+        )}
+
+        {growthType === 'cpiLinked' && (
+          <div className="mt-3 bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-sm font-medium text-blue-800">CPI</span>
+              <Select
+                label=""
+                value={cpiOperation}
+                onChange={(e) => setCpiOperation(e.target.value as GrowthOperation)}
+              >
+                <option value="add">+</option>
+                <option value="subtract">−</option>
+                <option value="multiply">×</option>
+              </Select>
+              <Input
+                label=""
+                type="number"
+                step="0.1"
+                value={cpiValue}
+                onChange={(e) => setCpiValue(e.target.value)}
+                className="w-24"
+              />
+              <span className="text-sm text-blue-600">
+                {cpiOperation === 'multiply' ? '' : '%'}
+              </span>
+            </div>
+            <p className="text-xs text-blue-600">
+              {cpiOperation === 'add' && `If CPI is 3%, growth = ${(3 + (parseFloat(cpiValue) || 0)).toFixed(1)}%`}
+              {cpiOperation === 'subtract' && `If CPI is 3%, growth = ${(3 - (parseFloat(cpiValue) || 0)).toFixed(1)}%`}
+              {cpiOperation === 'multiply' && `If CPI is 3%, growth = ${(3 * (parseFloat(cpiValue) || 0)).toFixed(1)}%`}
+            </p>
+          </div>
+        )}
+
+        {(growthType === 'increasing' || growthType === 'decreasing') && (
+          <div className="mt-3 grid grid-cols-2 gap-4">
+            <Input
+              label="Starting Rate (%)"
+              type="number"
+              step="0.1"
+              value={growthRate}
+              onChange={(e) => setGrowthRate(e.target.value)}
+            />
             <Input
               label="Change Per Year (%)"
               type="number"
@@ -224,8 +311,8 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
               value={changePerYear}
               onChange={(e) => setChangePerYear(e.target.value)}
             />
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {type === 'asset' && (
@@ -300,31 +387,89 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
         </div>
 
         {endConditionType !== 'none' && (
-          <div className="mt-4 grid grid-cols-2 gap-4">
-            <Select
-              label="End Behavior"
-              value={endBehavior}
-              onChange={(e) => setEndBehavior(e.target.value as EndBehavior)}
-            >
-              <option value="zero">Set to Zero</option>
-              <option value="transfer">Transfer to Account</option>
-              <option value="hold">Hold Value</option>
-            </Select>
-            {endBehavior === 'transfer' && (
+          <div className="mt-4 space-y-4">
+            <div className="grid grid-cols-2 gap-4">
               <Select
-                label="Transfer To"
-                value={transferToAccountId}
-                onChange={(e) => setTransferToAccountId(e.target.value)}
+                label="End Behavior"
+                value={endBehavior}
+                onChange={(e) => setEndBehavior(e.target.value as EndBehavior)}
               >
-                <option value="" disabled>Select account...</option>
-                {otherAccounts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
+                <option value="zero">Set to Zero</option>
+                <option value="transfer">Transfer to Account</option>
+                <option value="hold">Hold Value</option>
+                {type === 'asset' && <option value="sell">Sell (triggers CGT)</option>}
               </Select>
+              {(endBehavior === 'transfer' || endBehavior === 'sell') && (
+                <Select
+                  label={endBehavior === 'sell' ? 'Proceeds To' : 'Transfer To'}
+                  value={transferToAccountId}
+                  onChange={(e) => setTransferToAccountId(e.target.value)}
+                >
+                  <option value="" disabled>Select account...</option>
+                  {otherAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </Select>
+              )}
+            </div>
+            
+            {endBehavior === 'sell' && type === 'asset' && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                <h4 className="text-sm font-medium text-amber-800 mb-3">Capital Gains Tax Settings</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <Input
+                    label="Cost Base ($)"
+                    type="number"
+                    value={costBase}
+                    onChange={(e) => setCostBase(e.target.value)}
+                    placeholder="Original purchase price"
+                  />
+                  <Input
+                    label="Acquisition Year"
+                    type="number"
+                    value={acquisitionYear}
+                    onChange={(e) => setAcquisitionYear(e.target.value)}
+                    placeholder="e.g. 2020"
+                  />
+                </div>
+                <div className="mt-3">
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={eligibleForCgtDiscount}
+                      onChange={(e) => setEligibleForCgtDiscount(e.target.checked)}
+                      className="rounded border-gray-300"
+                    />
+                    Eligible for 50% CGT discount (held &gt; 12 months)
+                  </label>
+                </div>
+                <p className="text-xs text-amber-600 mt-2">
+                  If cost base is not set, initial value will be used.
+                </p>
+              </div>
             )}
           </div>
         )}
       </div>
+
+      {(type === 'income' || type === 'asset') && (
+        <div className="border-t pt-4">
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Tax Funding Override</h3>
+          <Select
+            label="Pay Tax From"
+            value={taxFundedFromAccountId}
+            onChange={(e) => setTaxFundedFromAccountId(e.target.value)}
+          >
+            <option value="">Use default (from Settings)</option>
+            {assetAccounts.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </Select>
+          <p className="text-xs text-gray-500 mt-1">
+            Override which account pays tax generated by this account.
+          </p>
+        </div>
+      )}
 
       <div className="flex justify-end gap-2 pt-4 border-t">
         <Button type="button" variant="secondary" onClick={onCancel}>

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -19,6 +19,8 @@ import { YearCell } from './YearCell';
 import type { Account, AccountType } from '../../schemas/account';
 import type { Event } from '../../schemas/event';
 import type { ForecastResult, YearResult } from '../../schemas/forecast';
+import type { TaxAggregation, TaxEvent } from '../../schemas/tax';
+import { TaxDetailPanel } from '../tax';
 
 interface SpreadsheetViewProps {
   forecast: ForecastResult | null;
@@ -48,8 +50,17 @@ const totalsRows: TotalsRow[] = [
 
 
 
+interface TaxDetailState {
+  year: number;
+  fundingAccountId: string;
+  aggregation: TaxAggregation;
+  taxEvents: TaxEvent[];
+}
+
 export function SpreadsheetView({ forecast, accounts, events = [], showEventHighlights = false, eventHighlightColor, onAccountClick, onReorder }: SpreadsheetViewProps) {
   const years = forecast?.years ?? [];
+  const [selectedTaxDetail, setSelectedTaxDetail] = useState<TaxDetailState | null>(null);
+  const [isTaxExpanded, setIsTaxExpanded] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -69,7 +80,14 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
 
   const taxAggregationsByFundingAccount = useMemo(() => {
     const fundingAccounts = new Set<string>();
-    const aggregationsByYear = new Map<string, Map<number, { calculatedTax: number; fundedFromAccountName: string; taxSchedule: string }>>();
+    const aggregationsByYear = new Map<string, Map<number, { calculatedTax: number; totalAssessable: number; fundedFromAccountName: string; taxSchedule: string }>>();
+    
+    // Track tax events by type and source: fundingAccountId -> taxType -> sourceKey -> year -> data
+    type TaxEventData = { assessableAmount: number; description: string };
+    const eventsByTypeAndSource = new Map<string, Map<string, Map<string, Map<number, TaxEventData>>>>();
+    
+    // Track subtotals by type: fundingAccountId -> taxType -> year -> subtotal
+    const subtotalsByType = new Map<string, Map<string, Map<number, number>>>();
     
     for (const yearResult of years) {
       for (const agg of yearResult.taxAggregations) {
@@ -80,15 +98,61 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
         }
         aggregationsByYear.get(agg.fundedFromAccountId)!.set(yearResult.year, {
           calculatedTax: agg.calculatedTax,
+          totalAssessable: agg.totalAssessable,
           fundedFromAccountName: agg.fundedFromAccountName,
           taxSchedule: agg.taxSchedule,
         });
       }
+      
+      // Organize tax events by type, then by source
+      for (const taxEvent of yearResult.taxEvents) {
+        const fundingId = taxEvent.fundedFromAccountId;
+        const taxType = taxEvent.type;
+        const sourceKey = taxEvent.sourceAccountId ?? `__${taxEvent.type}__${taxEvent.description}`;
+        const sourceName = taxEvent.sourceAccountName ?? taxEvent.description;
+        
+        // Initialize nested maps
+        if (!eventsByTypeAndSource.has(fundingId)) {
+          eventsByTypeAndSource.set(fundingId, new Map());
+        }
+        const fundingEvents = eventsByTypeAndSource.get(fundingId)!;
+        if (!fundingEvents.has(taxType)) {
+          fundingEvents.set(taxType, new Map());
+        }
+        const typeEvents = fundingEvents.get(taxType)!;
+        if (!typeEvents.has(sourceKey)) {
+          typeEvents.set(sourceKey, new Map());
+        }
+        typeEvents.get(sourceKey)!.set(yearResult.year, {
+          assessableAmount: taxEvent.assessableAmount,
+          description: sourceName,
+        });
+        
+        // Track subtotals by type
+        if (!subtotalsByType.has(fundingId)) {
+          subtotalsByType.set(fundingId, new Map());
+        }
+        const fundingSubtotals = subtotalsByType.get(fundingId)!;
+        if (!fundingSubtotals.has(taxType)) {
+          fundingSubtotals.set(taxType, new Map());
+        }
+        const typeSubtotals = fundingSubtotals.get(taxType)!;
+        typeSubtotals.set(yearResult.year, (typeSubtotals.get(yearResult.year) ?? 0) + taxEvent.assessableAmount);
+      }
+    }
+    
+    // Calculate total tax across all funding accounts per year
+    const totalTaxByYear = new Map<number, number>();
+    for (const yearResult of years) {
+      totalTaxByYear.set(yearResult.year, yearResult.taxPayable);
     }
     
     return {
       fundingAccounts: Array.from(fundingAccounts),
       aggregationsByYear,
+      eventsByTypeAndSource,
+      subtotalsByType,
+      totalTaxByYear,
     };
   }, [years]);
 
@@ -230,7 +294,7 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
                 items={accountsByType.asset.map((a) => a.id)}
                 strategy={verticalListSortingStrategy}
               >
-                <GroupHeader title="Assets" colSpan={colSpan}>
+                <GroupHeader title="Assets (Closing Balances)" colSpan={colSpan}>
                   {accountsByType.asset.map((account) => (
                     <AccountRow
                       key={account.id}
@@ -257,7 +321,7 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
                 items={accountsByType.liability.map((a) => a.id)}
                 strategy={verticalListSortingStrategy}
               >
-                <GroupHeader title="Liabilities" colSpan={colSpan}>
+                <GroupHeader title="Liabilities (Closing Balances)" colSpan={colSpan}>
                   {accountsByType.liability.map((account) => (
                     <AccountRow
                       key={account.id}
@@ -284,28 +348,200 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
                   Tax
                 </th>
               </tr>
-              {taxAggregationsByFundingAccount.fundingAccounts.map((fundingAccountId) => {
+              
+              {/* Single Total Tax row */}
+              <tr className="bg-amber-50/30">
+                <td className="px-3 py-2 text-left text-gray-900 sticky left-0 bg-white border-r border-gray-200 min-w-48">
+                  <div className="flex items-start gap-2">
+                    <button
+                      onClick={() => setIsTaxExpanded(!isTaxExpanded)}
+                      className="mt-0.5 text-gray-400 hover:text-gray-600 flex-shrink-0"
+                    >
+                      {isTaxExpanded ? '▼' : '▶'}
+                    </button>
+                    <span className="font-medium">Total Tax</span>
+                  </div>
+                </td>
+                {years.map((yearData) => {
+                  const totalTax = taxAggregationsByFundingAccount.totalTaxByYear.get(yearData.year) ?? 0;
+                  return (
+                    <td
+                      key={yearData.year}
+                      className="px-3 py-2 text-right text-gray-900 font-medium"
+                    >
+                      {new Intl.NumberFormat('en-AU', {
+                        style: 'currency',
+                        currency: 'AUD',
+                        minimumFractionDigits: 0,
+                        maximumFractionDigits: 0,
+                      }).format(totalTax)}
+                    </td>
+                  );
+                })}
+              </tr>
+              
+              {/* Expanded: Show funding account sections */}
+              {isTaxExpanded && taxAggregationsByFundingAccount.fundingAccounts.map((fundingAccountId) => {
                 const aggsByYear = taxAggregationsByFundingAccount.aggregationsByYear.get(fundingAccountId);
                 const firstAgg = aggsByYear?.values().next().value;
                 const fundedFromName = firstAgg?.fundedFromAccountName ?? 'Not configured';
                 const taxSchedule = firstAgg?.taxSchedule === 'flatRate15' ? '15% flat' : 'Marginal rates';
                 
+                const eventsByType = taxAggregationsByFundingAccount.eventsByTypeAndSource.get(fundingAccountId);
+                const subtotals = taxAggregationsByFundingAccount.subtotalsByType.get(fundingAccountId);
+                
+                const handleTaxCellClick = (yearData: YearResult) => {
+                  const taxEventsForYear = yearData.taxEvents.filter(
+                    e => e.fundedFromAccountId === fundingAccountId
+                  );
+                  const aggForYear = yearData.taxAggregations.find(
+                    a => a.fundedFromAccountId === fundingAccountId
+                  );
+                  if (aggForYear) {
+                    setSelectedTaxDetail({
+                      year: yearData.year,
+                      fundingAccountId,
+                      aggregation: aggForYear,
+                      taxEvents: taxEventsForYear,
+                    });
+                  }
+                };
+
+                const formatCurrency = (value: number) => new Intl.NumberFormat('en-AU', {
+                  style: 'currency',
+                  currency: 'AUD',
+                  minimumFractionDigits: 0,
+                  maximumFractionDigits: 0,
+                }).format(value);
+
+                const taxTypeConfig: Record<string, { label: string; bgClass: string; textClass: string }> = {
+                  incomeTax: { label: 'Income', bgClass: 'bg-blue-100', textClass: 'text-blue-700' },
+                  capitalGainsTax: { label: 'Capital Gains', bgClass: 'bg-purple-100', textClass: 'text-purple-700' },
+                  taxDeduction: { label: 'Deductions', bgClass: 'bg-green-100', textClass: 'text-green-700' },
+                  superContributionTax: { label: 'Super Contributions', bgClass: 'bg-orange-100', textClass: 'text-orange-700' },
+                };
+
+                const taxTypes = eventsByType ? Array.from(eventsByType.keys()) : [];
+                
                 return (
-                  <tr key={fundingAccountId} className="bg-amber-50/30">
-                    <td className="px-3 py-2 text-left text-gray-900 sticky left-0 bg-white border-r border-gray-200 min-w-48">
-                      <div>
-                        <span className="font-medium">Income Tax</span>
-                        <div className="text-xs text-gray-500">Paid from: {fundedFromName}</div>
-                        <div className="text-xs text-gray-400">{taxSchedule}</div>
-                      </div>
-                    </td>
-                    {years.map((yearData) => {
-                      const agg = aggsByYear?.get(yearData.year);
+                  <>
+                    {/* Funding account header row */}
+                    <tr key={fundingAccountId} className="bg-amber-100/50">
+                      <td className="px-3 py-1.5 text-left text-gray-800 sticky left-0 bg-amber-100/50 border-r border-gray-200 min-w-48 pl-8">
+                        <div>
+                          <span className="font-medium text-sm">Paid from: {fundedFromName}</span>
+                          <span className="text-xs text-gray-500 ml-2">({taxSchedule})</span>
+                        </div>
+                      </td>
+                      {years.map((yearData) => (
+                        <td key={yearData.year} className="px-3 py-1.5 text-right text-gray-400 text-xs">
+                          Assessable
+                        </td>
+                      ))}
+                    </tr>
+                    
+                    {/* Tax type sections with individual accounts */}
+                    {taxTypes.map((taxType) => {
+                      const typeConfig = taxTypeConfig[taxType] ?? { label: taxType, bgClass: 'bg-gray-100', textClass: 'text-gray-700' };
+                      const sourcesByKey = eventsByType?.get(taxType);
+                      const typeSubtotals = subtotals?.get(taxType);
+                      
+                      if (!sourcesByKey) return null;
+                      
+                      const sourceKeys = Array.from(sourcesByKey.keys());
+                      
                       return (
-                        <YearCell key={yearData.year} value={agg?.calculatedTax ?? 0} />
+                        <>
+                          {/* Individual account rows for this tax type */}
+                          {sourceKeys.map((sourceKey) => {
+                            const sourceEventsByYear = sourcesByKey.get(sourceKey);
+                            const firstEvent = sourceEventsByYear?.values().next().value;
+                            const sourceName = firstEvent?.description ?? 'Unknown';
+                            
+                            return (
+                              <tr key={`${fundingAccountId}-${taxType}-${sourceKey}`} className="bg-white">
+                                <td className="px-3 py-1 text-left text-gray-600 sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-12">
+                                  <div className="flex items-center gap-2">
+                                    <span className={`text-xs px-1.5 py-0.5 rounded ${typeConfig.bgClass} ${typeConfig.textClass}`}>
+                                      {typeConfig.label}
+                                    </span>
+                                    <span className="text-sm">{sourceName}</span>
+                                  </div>
+                                </td>
+                                {years.map((yearData) => {
+                                  const eventData = sourceEventsByYear?.get(yearData.year);
+                                  return (
+                                    <td
+                                      key={yearData.year}
+                                      className={`px-3 py-1 text-right text-sm ${
+                                        taxType === 'taxDeduction' ? 'text-green-600' : 'text-gray-600'
+                                      }`}
+                                    >
+                                      {eventData ? formatCurrency(eventData.assessableAmount) : '-'}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            );
+                          })}
+                          
+                          {/* Subtotal row for this tax type */}
+                          <tr key={`${fundingAccountId}-${taxType}-subtotal`} className="bg-gray-50">
+                            <td className="px-3 py-1 text-left text-gray-700 sticky left-0 bg-gray-50 border-r border-gray-200 min-w-48 pl-12">
+                              <span className="text-sm font-medium">Subtotal {typeConfig.label}</span>
+                            </td>
+                            {years.map((yearData) => {
+                              const subtotal = typeSubtotals?.get(yearData.year) ?? 0;
+                              return (
+                                <td
+                                  key={yearData.year}
+                                  className={`px-3 py-1 text-right text-sm font-medium ${
+                                    taxType === 'taxDeduction' ? 'text-green-700' : 'text-gray-700'
+                                  }`}
+                                >
+                                  {formatCurrency(subtotal)}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        </>
                       );
                     })}
-                  </tr>
+                    
+                    {/* Total Assessable row */}
+                    <tr key={`${fundingAccountId}-total-assessable`} className="bg-amber-50">
+                      <td className="px-3 py-1.5 text-left text-gray-800 sticky left-0 bg-amber-50 border-r border-gray-200 min-w-48 pl-10">
+                        <span className="text-sm font-semibold">Total Assessable</span>
+                      </td>
+                      {years.map((yearData) => {
+                        const agg = aggsByYear?.get(yearData.year);
+                        return (
+                          <td key={yearData.year} className="px-3 py-1.5 text-right text-gray-800 text-sm font-semibold">
+                            {formatCurrency(agg?.totalAssessable ?? 0)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                    
+                    {/* Tax Payable row */}
+                    <tr key={`${fundingAccountId}-tax-payable`} className="bg-amber-100/70">
+                      <td className="px-3 py-1.5 text-left text-amber-800 sticky left-0 bg-amber-100/70 border-r border-gray-200 min-w-48 pl-10">
+                        <span className="text-sm font-semibold">Tax Payable</span>
+                      </td>
+                      {years.map((yearData) => {
+                        const agg = aggsByYear?.get(yearData.year);
+                        return (
+                          <td
+                            key={yearData.year}
+                            onClick={() => handleTaxCellClick(yearData)}
+                            className="px-3 py-1.5 text-right text-amber-800 text-sm font-semibold cursor-pointer hover:bg-amber-200 transition-colors"
+                          >
+                            {formatCurrency(agg?.calculatedTax ?? 0)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  </>
                 );
               })}
             </>
@@ -331,6 +567,15 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
           ))}
         </tbody>
       </table>
+
+      {selectedTaxDetail && (
+        <TaxDetailPanel
+          year={selectedTaxDetail.year}
+          taxEvents={selectedTaxDetail.taxEvents}
+          aggregation={selectedTaxDetail.aggregation}
+          onClose={() => setSelectedTaxDetail(null)}
+        />
+      )}
     </div>
   );
 }

@@ -243,9 +243,63 @@ Capital gains are **added to assessable income**, not taxed separately:
 
 ---
 
-## 5. Engine Computation Flow
+## 5. Transaction Timing & Growth Calculation
 
-### 5.1 Generate Tax Events
+### 5.1 Closing Balance Display
+
+All asset and liability values in the spreadsheet represent **closing (end-of-year) balances**. The UI labels sections as "Assets (Closing Balances)" and "Liabilities (Closing Balances)" for clarity.
+
+### 5.2 Transaction Order Within a Year
+
+Transactions are processed in a fixed order to ensure proper fund availability:
+
+```
+1. Opening Balance     = previous year's closing balance
+
+2. Lifecycle Moves     = account end transfers (sell house, transfer super)
+                         → Proceeds immediately available
+
+3. User Transfer Events = explicit transfers configured by user
+                         → Can use proceeds from step 2
+
+4. Growth              = applied based on Growth Calculation Method setting
+                         → Skipped if balance ≤ 0
+
+5. Derived Flows       = income deposits, expense withdrawals
+
+6. Tax Calculation     = aggregate, calculate, and deduct from funding accounts
+```
+
+This ordering ensures that when a user sells an asset and uses proceeds for transfers in the same year (e.g., house sale → downsizer contribution), the funds are available.
+
+### 5.3 Growth Calculation Method
+
+Configurable in Settings. Determines the balance used for growth calculations:
+
+| Method | Formula | Description |
+|--------|---------|-------------|
+| **Opening Balance** (default) | Growth on opening balance only | Conservative - transfers don't earn growth in the year received |
+| **Average Balance** | Growth on `opening + 0.5 × all transfers` | Assumes transactions happen mid-year, so they earn half a year's growth |
+
+**Example:** Bank receives $500k house proceeds, has $100k opening balance, 10% growth rate:
+
+| Method | Growth Base | Growth | End Value |
+|--------|-------------|--------|-----------|
+| Opening Balance | $100k | $10k | $610k |
+| Average Balance | $100k + $250k = $350k | $35k | $635k |
+
+### 5.4 Negative Balance Handling
+
+Accounts can go negative (overdrawn) but:
+- No growth is applied when balance ≤ 0
+- Negative balances are highlighted with a red background in the UI
+- A warning tooltip is shown: "⚠️ Negative balance (overdrawn)"
+
+---
+
+## 6. Engine Tax Computation Flow
+
+### 6.1 Generate Tax Events
 
 For each year, generate tax events from:
 - Income accounts (assessable income → income tax)
@@ -332,9 +386,9 @@ This ensures:
 
 ---
 
-## 6. UX Design
+## 7. UX Design
 
-### 6.1 Spreadsheet View (Simple)
+### 7.1 Spreadsheet View (Simple)
 
 Keep the main grid uncluttered with a single Tax row:
 
@@ -346,7 +400,7 @@ Keep the main grid uncluttered with a single Tax row:
   Net Worth         650,000  795,000  948,731
 ```
 
-### 6.2 Tax Detail Panel
+### 7.2 Tax Detail Panel
 
 Click any Tax cell to open a side panel showing:
 
@@ -371,7 +425,7 @@ Click any Tax cell to open a side panel showing:
 - Concessional cap and carry-forward status
 - CGT discount applied
 
-### 6.3 Account Configuration
+### 7.3 Account Configuration
 
 Add "Tax treatment" section to account editor:
 
@@ -386,7 +440,7 @@ Add "Tax treatment" section to account editor:
 - Mode: "Accumulation phase" / "Pension phase"
 - If accumulation: contribution settings
 
-### 6.4 End Behavior Configuration
+### 7.4 End Behavior Configuration
 
 When setting account end year, show:
 
@@ -406,7 +460,7 @@ Cost Base: $________
 Acquisition Year: ____
 ```
 
-### 6.5 Tax Funding Configuration
+### 7.5 Tax Funding Configuration
 
 **Person settings:**
 - Default tax funding account: [Account dropdown]
@@ -416,9 +470,9 @@ Acquisition Year: ____
 
 ---
 
-## 7. Schema Changes Required
+## 8. Schema Changes Required
 
-### 7.1 New File: `src/schemas/tax.ts`
+### 8.1 New File: `src/schemas/tax.ts`
 
 - `TaxClassificationSchema` (discriminated union)
 - `TaxBracketSchema`
@@ -427,11 +481,11 @@ Acquisition Year: ____
 - `SuperConcessionalCapSchema`
 - `TaxPolicySchema`
 
-### 7.2 Update: `src/schemas/person.ts`
+### 8.2 Update: `src/schemas/person.ts`
 
 - Add `defaultTaxFundingAccountId: string` (required)
 
-### 7.3 Update: `src/schemas/account.ts`
+### 8.3 Update: `src/schemas/account.ts`
 
 - Add `taxClassification?: TaxClassification`
 - Add `endBehavior: 'zero' | 'hold' | 'transfer' | 'sell'`
@@ -439,20 +493,20 @@ Acquisition Year: ____
 - Add `costBase?: number`
 - Add `acquisitionYear?: number`
 
-### 7.4 Update: `src/schemas/event.ts`
+### 8.4 Update: `src/schemas/event.ts`
 
 - Add `taxClassification?: TaxClassification`
 - Add `taxFundedFrom?: string` (account ID, optional override)
 
 ---
 
-## 8. Implementation Phases
+## 9. Implementation Phases
 
 | Phase | Scope | Status |
 |-------|-------|--------|
 | Phase 1 (MVP) | Income tax with aggregation, tax funded from default account | ✅ Implemented |
-| Phase 2 | Add `sell` end behavior with CGT calculation, CGT added to assessable income | Planned |
-| Phase 4 | Super contribution tracking, carry-forward caps, excess contribution tax (15% flat) | Planned |
+| Phase 1.1 | CGT on `sell` end behavior, transaction timing fix, growth calculation methods | ✅ Implemented |
+| Phase 2 | Super contribution tracking, carry-forward caps, excess contribution tax (15% flat) | Planned |
 
 ### Phase 1 Implemented Features:
 - Tax events generated for income
@@ -462,9 +516,17 @@ Acquisition Year: ____
 - Tax section in spreadsheet UI showing calculated tax per funding account
 - Default tax funding account configurable in Settings
 
+### Phase 1.1 Implemented Features:
+- CGT calculation for accounts with `endBehavior: 'sell'`
+- 50% CGT discount for holdings > 12 months
+- Fixed transaction timing: lifecycle events (sales) happen before user transfers
+- Negative balance support with warnings
+- Growth calculation method setting (Opening Balance vs Average Balance)
+- UI labels clarifying "Closing Balances"
+
 ---
 
-## 9. Open Questions
+## 10. Open Questions
 
 - [ ] Should we track cost base per lot for shares (FIFO/LIFO)?
 - [ ] How to handle principal residence CGT exemption?

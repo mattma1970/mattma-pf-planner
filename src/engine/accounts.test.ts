@@ -72,16 +72,44 @@ describe('projectAccountValue', () => {
     expect(result).toBe(105000);
   });
 
-  it('applies cpiLinked growth with offset', () => {
+  it('applies cpiLinked growth with add operation', () => {
     const account: Account = {
       id: 'test3333-3333-3333-3333-333333333333',
       name: 'CPI Linked Account',
       type: 'expense',
       initialValue: 50000,
-      growthProfile: { type: 'cpiLinked', offset: 0.01 },
+      growthProfile: { type: 'cpiLinked', operation: 'add', value: 0.01 },
     };
 
     const expectedRate = assumptions.cpi + 0.01;
+    const result = projectAccountValue(account, 2024, 50000, assumptions, 1);
+    expect(result).toBe(50000 * (1 + expectedRate));
+  });
+
+  it('applies cpiLinked growth with subtract operation', () => {
+    const account: Account = {
+      id: 'test3333-3333-3333-3333-333333333334',
+      name: 'CPI Linked Subtract',
+      type: 'expense',
+      initialValue: 50000,
+      growthProfile: { type: 'cpiLinked', operation: 'subtract', value: 0.01 },
+    };
+
+    const expectedRate = assumptions.cpi - 0.01;
+    const result = projectAccountValue(account, 2024, 50000, assumptions, 1);
+    expect(result).toBe(50000 * (1 + expectedRate));
+  });
+
+  it('applies cpiLinked growth with multiply operation', () => {
+    const account: Account = {
+      id: 'test3333-3333-3333-3333-333333333335',
+      name: 'CPI Linked Multiply',
+      type: 'expense',
+      initialValue: 50000,
+      growthProfile: { type: 'cpiLinked', operation: 'multiply', value: 0.5 },
+    };
+
+    const expectedRate = assumptions.cpi * 0.5;
     const result = projectAccountValue(account, 2024, 50000, assumptions, 1);
     expect(result).toBe(50000 * (1 + expectedRate));
   });
