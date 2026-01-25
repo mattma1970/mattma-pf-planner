@@ -1,6 +1,6 @@
 # Tax System Design
 
-**Version:** 0.1 (Draft)  
+**Version:** 0.2  
 **Last Updated:** 2026-01-25  
 **Status:** Design
 
@@ -17,7 +17,9 @@ This document describes the data structures and UX for handling Australian tax i
 
 ---
 
-## Core Principle: Two-Part Design
+## Core Principles
+
+### Two-Part Design
 
 | Component | Scope | Purpose |
 |-----------|-------|---------|
@@ -25,6 +27,29 @@ This document describes the data structures and UX for handling Australian tax i
 | `TaxPolicy` | Global (assumptions) | Describes *how* each type is taxed |
 
 This separates "what is this?" from "how do we tax it?" - allowing flexible rules without hardcoding.
+
+### Aggregate Then Calculate
+
+**Critical:** Tax is calculated on **aggregated** values, not individual events.
+
+Multiple sources contribute to a person's tax liability:
+- Regular income (salary, rental, dividends)
+- Capital gains (added to assessable income after discount)
+- Super contribution deductions (reduce taxable income)
+
+The tax calculation flow is:
+
+1. **Generate Tax Events** - Each taxable source creates a tax event row for transparency
+2. **Group by Funding Account** - Aggregate all tax events by their `fundedFromAccountId`
+3. **Apply Tax Schedule** - Use the appropriate tax schedule for each group:
+   - Personal accounts (bank): Marginal income tax rates
+   - Super accounts: Flat 15% contribution tax
+4. **Deduct from Funding Account** - Each funding account is reduced by its calculated tax
+
+This ensures:
+- Super contribution deductions reduce the income tax base correctly
+- CGT is added to income and taxed at marginal rates
+- Super excess contribution tax is paid from within the super fund
 
 ---
 
@@ -147,7 +172,7 @@ Stored in assumptions, configurable by Configurator role:
 
 ---
 
-## 4. Tax Funding
+## 4. Tax Funding & Aggregation
 
 **Critical:** Calculated tax must be paid from an actual account, not just reported.
 
@@ -156,107 +181,154 @@ Stored in assumptions, configurable by Configurator role:
 Each taxable entity (person) must nominate a **default tax funding account** (typically a cash/bank account). Individual accounts or events can override this.
 
 ```typescript
-// On Person schema
+// In Settings
 defaultTaxFundingAccountId: z.string().uuid()
 
 // On Account/Event schema (optional override)
 taxFundedFrom: z.string().uuid().optional()
 ```
 
-### 4.2 Tax Payment Flow
+### 4.2 Aggregation by Funding Account
 
-1. Engine calculates total tax liability for person/year
-2. Tax is deducted from the funding account in that year
-3. If funding account has insufficient balance:
-   - Option A: Allow negative balance (overdraft)
-   - Option B: Flag as warning in UI
-   - Option C: Auto-liquidate from nominated backup account
+Tax events are aggregated by their `fundedFromAccountId` before calculation:
 
-### 4.3 Super Tax (Inside Fund)
+| Funding Account Type | Tax Events Included | Tax Schedule |
+|---------------------|---------------------|--------------|
+| Personal (bank/cash) | Income tax + CGT | Marginal income tax rates |
+| Super account | Excess contribution tax | Flat 15% |
 
-For excess contribution tax (15%), the tax is paid from **within the super account itself**, not the external funding account.
+**Example:**
+```
+Year 2025:
+  Tax Events:
+    - Income Tax (Salary): $100,000 assessable → funded by Bank
+    - CGT (Share sale): $20,000 discounted gain → funded by Bank
+    - Super Excess Tax: $5,000 excess contribution → funded by Super
 
-### 4.4 CGT on Asset Sale
+  Aggregation:
+    Bank Account Group:
+      - Assessable: $100,000 + $20,000 = $120,000
+      - Tax (marginal rates): $29,467 + ($120,000 - $120,000) × 0.37 = $29,467
+    
+    Super Account Group:
+      - Excess: $5,000
+      - Tax (15% flat): $750
+```
 
-When an asset is sold (`endBehavior: 'sell'`):
-1. Calculate gross proceeds
-2. Calculate CGT liability
-3. Deduct CGT from proceeds before transferring to destination account
+### 4.3 Tax Payment Flow
 
-OR
+1. Generate tax events from accounts and events (for reporting)
+2. Group tax events by `fundedFromAccountId`
+3. For each funding account group:
+   - Calculate total assessable amount
+   - Apply appropriate tax schedule
+   - Deduct calculated tax from the funding account
+4. If funding account has insufficient balance:
+   - Allow negative balance (overdraft with warning)
 
-1. Transfer full proceeds to destination account
-2. Deduct CGT from the `taxFundedFrom` account
+### 4.4 Super Tax (Inside Fund)
 
-**Recommendation:** Option 2 is more realistic (ATO bills you later), but Option 1 is simpler for MVP.
+For excess contribution tax (15%), the super account itself is the funding account:
+- Tax events with `fundedFromAccountId` = super account ID
+- Calculated at flat 15% rate
+- Deducted directly from super balance
+
+### 4.5 CGT Integration
+
+Capital gains are **added to assessable income**, not taxed separately:
+1. CGT event creates tax event with discounted gain amount
+2. Tax event grouped with other personal income
+3. Combined amount taxed at marginal rates
+4. Total tax deducted from the personal funding account (bank)
 
 ---
 
 ## 5. Engine Computation Flow
 
-### 5.1 Generate Taxable Flows
+### 5.1 Generate Tax Events
 
-For each year, convert accounts and events into taxable flows:
+For each year, generate tax events from:
+- Income accounts (assessable income → income tax)
+- Asset sales with `endBehavior: 'sell'` (capital gains → CGT)
+- Super contributions over cap (excess → contribution tax)
 
 ```typescript
-type TaxableFlow = {
+type TaxEvent = {
+  id: string
   year: number
-  personId: string
-  source: { kind: 'account' | 'event', id: string }
-  amount: number
-  classification: TaxClassification
+  type: 'incomeTax' | 'capitalGainsTax' | 'superContributionTax'
+  description: string
+  sourceAccountId?: string
+  sourceAccountName?: string
+  assessableAmount: number      // Amount that contributes to tax base
+  fundedFromAccountId: string   // Which account pays this tax
+  fundedFromAccountName?: string
 }
 ```
 
-### 5.2 Aggregate by Person/Year
+### 5.2 Aggregate by Funding Account
 
-Group flows and compute:
+Group tax events by `fundedFromAccountId` and sum assessable amounts:
 
-1. **Assessable income** - sum of `assessableIncome` flows × proportion
-2. **Capital gains** - from `capitalGainRealisation` flows, apply discount
-3. **Super contributions** - track against caps
-4. **Deductions** - deductible super contributions (up to cap)
+```typescript
+type TaxAggregation = {
+  fundedFromAccountId: string
+  fundedFromAccountName: string
+  taxSchedule: 'marginalRates' | 'flatRate15'
+  totalAssessableAmount: number
+  taxEvents: TaxEvent[]
+}
+```
 
-### 5.3 Apply Tax Policy
+**Determining Tax Schedule:**
+- If funding account is a super account → `flatRate15`
+- Otherwise → `marginalRates`
+
+### 5.3 Calculate Tax per Group
+
+For each aggregation group:
+
+```typescript
+if (taxSchedule === 'marginalRates') {
+  calculatedTax = calculateIncomeTax(totalAssessableAmount, year)
+} else {
+  calculatedTax = totalAssessableAmount * 0.15
+}
+```
+
+### 5.4 Deduct Tax from Funding Accounts
+
+For each aggregation group:
+1. Look up the funding account
+2. Reduce account balance by `calculatedTax`
+3. Record the withdrawal in account results
+
+### 5.5 Output Structure
 
 ```typescript
 type YearlyTaxSummary = {
   year: number
-  personId: string
   
-  // Income components
-  grossAssessableIncome: number
-  capitalGains: number
-  capitalGainsDiscount: number
+  // Individual tax events (for reporting/transparency)
+  taxEvents: TaxEvent[]
   
-  // Super contributions
-  concessionalContributions: number
-  concessionalCap: number
-  carryForwardUsed: number
-  carryForwardRemaining: number
-  excessContributions: number
+  // Aggregated results (for calculation)
+  aggregations: {
+    fundedFromAccountId: string
+    totalAssessable: number
+    calculatedTax: number
+    taxSchedule: 'marginalRates' | 'flatRate15'
+  }[]
   
-  // Deductions
-  deductibleSuperUsed: number
-  
-  // Final tax
-  taxableIncome: number
-  incomeTax: number
-  superTaxInsideFund: number  // 15% on excess
-  totalTax: number
-  fundedFromAccountId: string
+  // Totals
+  totalTaxPayable: number
 }
 ```
 
-### 5.4 Deduct Tax from Funding Account
-
-After computing `YearlyTaxSummary`:
-
-1. Look up `fundedFromAccountId` for the person
-2. Reduce that account's balance by `totalTax` (excluding `superTaxInsideFund`)
-3. For `superTaxInsideFund`, reduce the super account balance directly
-
-This ensures the tax actually impacts the forecast, not just reported.
+This ensures:
+- Tax section shows individual events for transparency
+- Actual tax calculated on aggregated amounts
+- Correct tax schedule applied per funding account
 
 ---
 
@@ -376,11 +448,19 @@ Acquisition Year: ____
 
 ## 8. Implementation Phases
 
-| Phase | Scope |
-|-------|-------|
-| Phase 1 (MVP) | Hardcoded income tax brackets, tax funded from default account |
-| Phase 2 | Add `sell` end behavior with CGT calculation |
-| Phase 4 | Full tax classification system, configurable rules, super contribution tracking |
+| Phase | Scope | Status |
+|-------|-------|--------|
+| Phase 1 (MVP) | Income tax with aggregation, tax funded from default account | ✅ Implemented |
+| Phase 2 | Add `sell` end behavior with CGT calculation, CGT added to assessable income | Planned |
+| Phase 4 | Super contribution tracking, carry-forward caps, excess contribution tax (15% flat) | Planned |
+
+### Phase 1 Implemented Features:
+- Tax events generated for income
+- Tax aggregation by funding account
+- Tax schedule selection (marginal rates vs flat 15%)
+- Tax deducted from funding account
+- Tax section in spreadsheet UI showing calculated tax per funding account
+- Default tax funding account configurable in Settings
 
 ---
 
@@ -390,3 +470,4 @@ Acquisition Year: ____
 - [ ] How to handle principal residence CGT exemption?
 - [ ] Medicare levy and surcharge - include in Phase 4?
 - [ ] Franking credits on dividends - include?
+- [x] How to aggregate tax events from multiple sources? → Aggregate by funding account

@@ -308,4 +308,127 @@ describe('calculateForecast', () => {
       expect(accountAfterEnd!.endValue).toBe(0);
     });
   });
+
+  describe('tax funding', () => {
+    it('deducts tax from the designated funding account', () => {
+      const salaryAccount: Account = {
+        id: 'salary-1111-1111-1111-111111111111',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const bankAccount: Account = {
+        id: 'bank-1111-1111-1111-111111111111',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 50000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const settingsWithTaxFunding: Settings = {
+        ...testSettings,
+        defaultTaxFundingAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [salaryAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: settingsWithTaxFunding,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      expect(year2025.taxPayable).toBeGreaterThan(0);
+
+      const bankResult = year2025.accounts.find((a) => a.accountId === bankAccount.id);
+      expect(bankResult).toBeDefined();
+      expect(bankResult!.withdrawals).toBe(year2025.taxPayable);
+      expect(bankResult!.endValue).toBe(50000 - year2025.taxPayable);
+    });
+
+    it('does not deduct tax when no funding account is configured', () => {
+      const salaryAccount: Account = {
+        id: 'salary-2222-2222-2222-222222222222',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const bankAccount: Account = {
+        id: 'bank-2222-2222-2222-222222222222',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 50000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const result = calculateForecast({
+        accounts: [salaryAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      expect(year2025.taxPayable).toBeGreaterThan(0);
+
+      const bankResult = year2025.accounts.find((a) => a.accountId === bankAccount.id);
+      expect(bankResult).toBeDefined();
+      expect(bankResult!.withdrawals).toBe(0);
+      expect(bankResult!.endValue).toBe(50000);
+    });
+
+    it('generates tax aggregations grouped by funding account', () => {
+      const salaryAccount: Account = {
+        id: 'salary-3333-3333-3333-333333333333',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const bankAccount: Account = {
+        id: 'bank-3333-3333-3333-333333333333',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 50000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const settingsWithTaxFunding: Settings = {
+        ...testSettings,
+        defaultTaxFundingAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [salaryAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: settingsWithTaxFunding,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      
+      expect(year2025.taxEvents.length).toBe(1);
+      expect(year2025.taxEvents[0].type).toBe('incomeTax');
+      expect(year2025.taxEvents[0].assessableAmount).toBe(100000);
+      
+      expect(year2025.taxAggregations.length).toBe(1);
+      expect(year2025.taxAggregations[0].fundedFromAccountId).toBe(bankAccount.id);
+      expect(year2025.taxAggregations[0].taxSchedule).toBe('marginalRates');
+      expect(year2025.taxAggregations[0].calculatedTax).toBe(year2025.taxPayable);
+    });
+  });
 });

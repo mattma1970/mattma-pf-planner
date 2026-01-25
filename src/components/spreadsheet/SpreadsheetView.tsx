@@ -19,7 +19,6 @@ import { YearCell } from './YearCell';
 import type { Account, AccountType } from '../../schemas/account';
 import type { Event } from '../../schemas/event';
 import type { ForecastResult, YearResult } from '../../schemas/forecast';
-import type { TaxEvent } from '../../schemas/tax';
 
 interface SpreadsheetViewProps {
   forecast: ForecastResult | null;
@@ -47,11 +46,7 @@ const totalsRows: TotalsRow[] = [
   { label: 'Net Worth', getValue: (y) => y.totalAssets, isBold: true },
 ];
 
-const TAX_TYPE_LABELS: Record<string, string> = {
-  incomeTax: 'Income Tax',
-  capitalGainsTax: 'Capital Gains Tax',
-  superContributionTax: 'Super Contribution Tax',
-};
+
 
 export function SpreadsheetView({ forecast, accounts, events = [], showEventHighlights = false, eventHighlightColor, onAccountClick, onReorder }: SpreadsheetViewProps) {
   const years = forecast?.years ?? [];
@@ -72,24 +67,28 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
     };
   }, [accounts]);
 
-  const taxEventsByType = useMemo(() => {
-    const eventTypes = new Set<string>();
-    const eventsByYear = new Map<string, Map<number, TaxEvent>>();
+  const taxAggregationsByFundingAccount = useMemo(() => {
+    const fundingAccounts = new Set<string>();
+    const aggregationsByYear = new Map<string, Map<number, { calculatedTax: number; fundedFromAccountName: string; taxSchedule: string }>>();
     
     for (const yearResult of years) {
-      for (const taxEvent of yearResult.taxEvents) {
-        eventTypes.add(taxEvent.type);
+      for (const agg of yearResult.taxAggregations) {
+        fundingAccounts.add(agg.fundedFromAccountId);
         
-        if (!eventsByYear.has(taxEvent.type)) {
-          eventsByYear.set(taxEvent.type, new Map());
+        if (!aggregationsByYear.has(agg.fundedFromAccountId)) {
+          aggregationsByYear.set(agg.fundedFromAccountId, new Map());
         }
-        eventsByYear.get(taxEvent.type)!.set(yearResult.year, taxEvent);
+        aggregationsByYear.get(agg.fundedFromAccountId)!.set(yearResult.year, {
+          calculatedTax: agg.calculatedTax,
+          fundedFromAccountName: agg.fundedFromAccountName,
+          taxSchedule: agg.taxSchedule,
+        });
       }
     }
     
     return {
-      types: Array.from(eventTypes),
-      eventsByYear,
+      fundingAccounts: Array.from(fundingAccounts),
+      aggregationsByYear,
     };
   }, [years]);
 
@@ -275,7 +274,7 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
             </DndContext>
           )}
 
-          {taxEventsByType.types.length > 0 && (
+          {taxAggregationsByFundingAccount.fundingAccounts.length > 0 && (
             <>
               <tr className="bg-amber-50">
                 <th
@@ -285,23 +284,25 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
                   Tax
                 </th>
               </tr>
-              {taxEventsByType.types.map((taxType) => {
-                const eventsByYear = taxEventsByType.eventsByYear.get(taxType);
-                const firstEvent = eventsByYear?.values().next().value;
-                const fundedFromName = firstEvent?.fundedFromAccountName ?? 'Not configured';
+              {taxAggregationsByFundingAccount.fundingAccounts.map((fundingAccountId) => {
+                const aggsByYear = taxAggregationsByFundingAccount.aggregationsByYear.get(fundingAccountId);
+                const firstAgg = aggsByYear?.values().next().value;
+                const fundedFromName = firstAgg?.fundedFromAccountName ?? 'Not configured';
+                const taxSchedule = firstAgg?.taxSchedule === 'flatRate15' ? '15% flat' : 'Marginal rates';
                 
                 return (
-                  <tr key={taxType} className="bg-amber-50/30">
+                  <tr key={fundingAccountId} className="bg-amber-50/30">
                     <td className="px-3 py-2 text-left text-gray-900 sticky left-0 bg-white border-r border-gray-200 min-w-48">
                       <div>
-                        <span className="font-medium">{TAX_TYPE_LABELS[taxType] ?? taxType}</span>
+                        <span className="font-medium">Income Tax</span>
                         <div className="text-xs text-gray-500">Paid from: {fundedFromName}</div>
+                        <div className="text-xs text-gray-400">{taxSchedule}</div>
                       </div>
                     </td>
                     {years.map((yearData) => {
-                      const taxEvent = eventsByYear?.get(yearData.year);
+                      const agg = aggsByYear?.get(yearData.year);
                       return (
-                        <YearCell key={yearData.year} value={taxEvent?.amount ?? 0} />
+                        <YearCell key={yearData.year} value={agg?.calculatedTax ?? 0} />
                       );
                     })}
                   </tr>

@@ -10,6 +10,8 @@ import type {
   AccountYearResult,
   Settings,
   TaxEvent,
+  TaxAggregation,
+  TaxSchedule,
 } from '../schemas';
 import { calculateIncomeTax } from './tax';
 import { resolveAssumptionForYear } from './assumptions';
@@ -204,6 +206,84 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       }
     }
 
+    const taxEvents: TaxEvent[] = [];
+    
+    const defaultFundingAccountId = settings.defaultTaxFundingAccountId ?? 'unassigned';
+    const defaultFundingAccount = settings.defaultTaxFundingAccountId 
+      ? accounts.find(a => a.id === settings.defaultTaxFundingAccountId) 
+      : undefined;
+
+    if (totalIncome > 0) {
+      taxEvents.push({
+        id: uuidv4(),
+        year,
+        type: 'incomeTax',
+        description: 'Income Tax',
+        assessableAmount: totalIncome,
+        fundedFromAccountId: defaultFundingAccountId,
+        fundedFromAccountName: defaultFundingAccount?.name ?? 'Not configured',
+      });
+    }
+
+    const aggregationMap = new Map<string, { 
+      fundedFromAccountName: string;
+      taxSchedule: TaxSchedule;
+      totalAssessable: number;
+      events: TaxEvent[];
+    }>();
+
+    for (const taxEvent of taxEvents) {
+      const existing = aggregationMap.get(taxEvent.fundedFromAccountId);
+      if (existing) {
+        existing.totalAssessable += taxEvent.assessableAmount;
+        existing.events.push(taxEvent);
+      } else {
+        const fundingAccount = accounts.find(a => a.id === taxEvent.fundedFromAccountId);
+        const isSuperAccount = fundingAccount?.type === 'asset' && 
+          fundingAccount.name?.toLowerCase().includes('super');
+        
+        aggregationMap.set(taxEvent.fundedFromAccountId, {
+          fundedFromAccountName: taxEvent.fundedFromAccountName ?? 'Unknown',
+          taxSchedule: isSuperAccount ? 'flatRate15' : 'marginalRates',
+          totalAssessable: taxEvent.assessableAmount,
+          events: [taxEvent],
+        });
+      }
+    }
+
+    const taxAggregations: TaxAggregation[] = [];
+    let taxPayable = 0;
+
+    for (const [fundedFromAccountId, agg] of aggregationMap) {
+      let calculatedTax: number;
+      if (agg.taxSchedule === 'marginalRates') {
+        calculatedTax = calculateIncomeTax(agg.totalAssessable, year);
+      } else {
+        calculatedTax = agg.totalAssessable * 0.15;
+      }
+
+      taxAggregations.push({
+        fundedFromAccountId,
+        fundedFromAccountName: agg.fundedFromAccountName,
+        taxSchedule: agg.taxSchedule,
+        totalAssessable: agg.totalAssessable,
+        calculatedTax,
+      });
+
+      taxPayable += calculatedTax;
+
+      if (fundedFromAccountId !== 'unassigned') {
+        const fundingResult = accountResults.get(fundedFromAccountId);
+        if (fundingResult) {
+          fundingResult.withdrawals += calculatedTax;
+          fundingResult.endValue -= calculatedTax;
+          accountValues.set(fundedFromAccountId, fundingResult.endValue);
+        }
+      }
+    }
+
+    const netPosition = totalIncome - totalExpenses - taxPayable;
+
     for (const account of accounts) {
       const result = accountResults.get(account.id);
       if (result) {
@@ -226,28 +306,6 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       }
     }
 
-    const taxPayable = calculateIncomeTax(totalIncome, year);
-    const netPosition = totalIncome - totalExpenses - taxPayable;
-
-    const taxEvents: TaxEvent[] = [];
-    
-    if (taxPayable > 0) {
-      const fundingAccountId = settings.defaultTaxFundingAccountId;
-      const fundingAccount = fundingAccountId 
-        ? accounts.find(a => a.id === fundingAccountId) 
-        : undefined;
-      
-      taxEvents.push({
-        id: uuidv4(),
-        year,
-        type: 'incomeTax',
-        description: 'Income Tax',
-        amount: taxPayable,
-        fundedFromAccountId: fundingAccountId ?? 'unassigned',
-        fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
-      });
-    }
-
     if (totalAssets > peakAssets) {
       peakAssets = totalAssets;
       peakAssetsYear = year;
@@ -262,6 +320,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       totalExpenses,
       taxPayable,
       taxEvents,
+      taxAggregations,
       netPosition,
       resolvedAssumptions,
     });
