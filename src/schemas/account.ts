@@ -42,6 +42,9 @@ export const AutoTopupSchema = z.object({
 });
 export type AutoTopup = z.infer<typeof AutoTopupSchema>;
 
+export const LiabilityPaymentTypeSchema = z.enum(['principalAndInterest', 'interestOnly']);
+export type LiabilityPaymentType = z.infer<typeof LiabilityPaymentTypeSchema>;
+
 export const AccountSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1),
@@ -75,5 +78,13 @@ export const AccountSchema = z.object({
   
   // Auto-topup: automatically transfer from another account when balance falls below threshold
   autoTopup: AutoTopupSchema.optional(),
+  
+  // Liability-specific fields
+  interestRate: z.number().optional(), // Annual interest rate as decimal (0.065 for 6.5%)
+  paymentType: LiabilityPaymentTypeSchema.optional(),
+  annualPayment: z.number().optional(), // Fixed annual payment amount
+  calculatePayment: z.boolean().optional(), // Auto-calculate payment to pay off by end date
+  offsetAccountId: z.string().uuid().optional(), // Asset account that offsets interest calculation
+  payoffFromAccountId: z.string().uuid().optional(), // Pay off when this asset sells
 });
 export type Account = z.infer<typeof AccountSchema>;

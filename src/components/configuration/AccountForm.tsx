@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button, Input, Select } from '../ui';
-import type { Account, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation } from '../../schemas/account';
+import type { Account, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType } from '../../schemas/account';
 
 interface AccountFormProps {
   account?: Account;
@@ -93,6 +93,14 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
   const [autoTopupFromAccountId, setAutoTopupFromAccountId] = useState(account?.autoTopup?.fromAccountId ?? '');
   const [autoTopupTargetBalance, setAutoTopupTargetBalance] = useState(account?.autoTopup?.targetBalance?.toString() ?? '');
 
+  // Liability-specific settings
+  const [interestRate, setInterestRate] = useState(account?.interestRate ? (account.interestRate * 100).toString() : '');
+  const [paymentType, setPaymentType] = useState<LiabilityPaymentType>(account?.paymentType ?? 'principalAndInterest');
+  const [annualPayment, setAnnualPayment] = useState(account?.annualPayment?.toString() ?? '');
+  const [calculatePayment, setCalculatePayment] = useState(account?.calculatePayment ?? false);
+  const [offsetAccountId, setOffsetAccountId] = useState(account?.offsetAccountId ?? '');
+  const [payoffFromAccountId, setPayoffFromAccountId] = useState(account?.payoffFromAccountId ?? '');
+
   const otherAccounts = accounts.filter((a) => a.id !== account?.id);
   const assetAccounts = accounts.filter((a) => a.type === 'asset' && a.id !== account?.id);
 
@@ -154,7 +162,7 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
       endBehavior: endCondition ? endBehavior : undefined,
       transferToAccountId: (endBehavior === 'transfer' || endBehavior === 'sell') ? transferToAccountId : undefined,
       depositsToAccountId: type === 'income' && depositsToAccountId ? depositsToAccountId : undefined,
-      fundedByAccountId: (type === 'expense' || type === 'asset') && fundedByAccountId ? fundedByAccountId : undefined,
+      fundedByAccountId: (type === 'expense' || type === 'asset' || type === 'liability') && fundedByAccountId ? fundedByAccountId : undefined,
       
       // Tax settings
       incomeTaxTreatment: type === 'income' && incomeTaxTreatment ? incomeTaxTreatment : undefined,
@@ -172,6 +180,14 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
         fromAccountId: autoTopupFromAccountId,
         targetBalance: autoTopupTargetBalance ? parseFloat(autoTopupTargetBalance) : undefined,
       } : undefined,
+      
+      // Liability-specific settings
+      interestRate: type === 'liability' && interestRate ? parseFloat(interestRate) / 100 : undefined,
+      paymentType: type === 'liability' ? paymentType : undefined,
+      annualPayment: type === 'liability' && !calculatePayment && annualPayment ? parseFloat(annualPayment) : undefined,
+      calculatePayment: type === 'liability' ? calculatePayment : undefined,
+      offsetAccountId: type === 'liability' && offsetAccountId ? offsetAccountId : undefined,
+      payoffFromAccountId: type === 'liability' && payoffFromAccountId ? payoffFromAccountId : undefined,
     });
   };
 
@@ -351,6 +367,92 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
             </Select>
+          </div>
+        </div>
+      )}
+
+      {type === 'liability' && (
+        <div className="border-t pt-4">
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Liability Details</h3>
+          
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <Input
+              label="Interest Rate (%)"
+              type="number"
+              step="0.1"
+              value={interestRate}
+              onChange={(e) => setInterestRate(e.target.value)}
+              placeholder="e.g. 6.5 for 6.5%"
+            />
+            <Select
+              label="Payment Type"
+              value={paymentType}
+              onChange={(e) => setPaymentType(e.target.value as LiabilityPaymentType)}
+            >
+              <option value="principalAndInterest">Principal & Interest</option>
+              <option value="interestOnly">Interest Only</option>
+            </Select>
+          </div>
+          
+          <div className="mb-4">
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={calculatePayment}
+                onChange={(e) => setCalculatePayment(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Auto-calculate payment to pay off by end date
+            </label>
+          </div>
+          
+          {!calculatePayment && (
+            <Input
+              label="Annual Payment"
+              type="number"
+              value={annualPayment}
+              onChange={(e) => setAnnualPayment(e.target.value)}
+              placeholder="Fixed annual payment amount"
+            />
+          )}
+          
+          <div className="grid grid-cols-2 gap-4 mt-4">
+            <Select
+              label="Payments From"
+              value={fundedByAccountId}
+              onChange={(e) => setFundedByAccountId(e.target.value)}
+            >
+              <option value="">None</option>
+              {assetAccounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </Select>
+            <Select
+              label="Offset Account"
+              value={offsetAccountId}
+              onChange={(e) => setOffsetAccountId(e.target.value)}
+            >
+              <option value="">None</option>
+              {assetAccounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </Select>
+          </div>
+          
+          <div className="mt-4">
+            <Select
+              label="Pay Off When Asset Sells"
+              value={payoffFromAccountId}
+              onChange={(e) => setPayoffFromAccountId(e.target.value)}
+            >
+              <option value="">None</option>
+              {assetAccounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </Select>
+            <p className="text-xs text-gray-500 mt-1">
+              Liability will be paid off when the selected asset is sold
+            </p>
           </div>
         </div>
       )}

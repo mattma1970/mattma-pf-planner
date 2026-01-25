@@ -564,7 +564,8 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
             </th>
           </tr>
           
-          {isCashflowExpanded && accounts.filter(a => a.type === 'asset').map((account) => {
+          {isCashflowExpanded && accounts.filter(a => a.type === 'asset' || a.type === 'liability').map((account) => {
+            const isLiability = account.type === 'liability';
             const formatCurrency = (value: number) => new Intl.NumberFormat('en-AU', {
               style: 'currency',
               currency: 'AUD',
@@ -575,9 +576,9 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
             return (
               <>
                 {/* Account header */}
-                <tr key={`cf-${account.id}-header`} className="bg-cyan-100/50">
-                  <td className="px-3 py-1.5 text-left text-cyan-800 font-medium sticky left-0 bg-cyan-100/50 border-r border-gray-200 min-w-48">
-                    {account.name}
+                <tr key={`cf-${account.id}-header`} className={isLiability ? 'bg-rose-100/50' : 'bg-cyan-100/50'}>
+                  <td className={`px-3 py-1.5 text-left font-medium sticky left-0 border-r border-gray-200 min-w-48 ${isLiability ? 'text-rose-800 bg-rose-100/50' : 'text-cyan-800 bg-cyan-100/50'}`}>
+                    {account.name} {isLiability && '(Liability)'}
                   </td>
                   {years.map((yearData) => (
                     <td key={yearData.year} className="px-3 py-1.5 text-right text-xs text-gray-400">
@@ -601,10 +602,10 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
                   })}
                 </tr>
                 
-                {/* Contributions (inflows) */}
+                {/* Contributions (inflows) / Borrowing (for liabilities) */}
                 <tr key={`cf-${account.id}-contrib`} className="bg-white">
                   <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
-                    + Contributions
+                    {isLiability ? '+ New Borrowing' : '+ Contributions'}
                   </td>
                   {years.map((yearData) => {
                     const result = yearData.accounts.find(a => a.accountId === account.id);
@@ -617,10 +618,10 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
                   })}
                 </tr>
                 
-                {/* Withdrawals (outflows) */}
+                {/* Withdrawals (outflows) / Principal Payments (for liabilities) */}
                 <tr key={`cf-${account.id}-withdraw`} className="bg-white">
                   <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
-                    − Withdrawals
+                    {isLiability ? '− Principal Paid' : '− Withdrawals (Total)'}
                   </td>
                   {years.map((yearData) => {
                     const result = yearData.accounts.find(a => a.accountId === account.id);
@@ -632,6 +633,33 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
                     );
                   })}
                 </tr>
+                
+                {/* Withdrawal breakdown (for non-liabilities with cashflow details) */}
+                {!isLiability && (() => {
+                  // Get all unique withdrawal descriptions across all years
+                  const allDescriptions = new Set<string>();
+                  years.forEach((yearData) => {
+                    const result = yearData.accounts.find(a => a.accountId === account.id);
+                    result?.cashflowDetails?.filter(d => d.type === 'withdrawal').forEach(d => allDescriptions.add(d.description));
+                  });
+                  
+                  return Array.from(allDescriptions).map((description) => (
+                    <tr key={`cf-${account.id}-detail-${description}`} className="bg-gray-50/50">
+                      <td className="px-3 py-0.5 text-left text-gray-500 text-xs sticky left-0 bg-gray-50/50 border-r border-gray-200 min-w-48 pl-10">
+                        {description}
+                      </td>
+                      {years.map((yearData) => {
+                        const result = yearData.accounts.find(a => a.accountId === account.id);
+                        const detail = result?.cashflowDetails?.find(d => d.description === description && d.type === 'withdrawal');
+                        return (
+                          <td key={yearData.year} className="px-3 py-0.5 text-right text-xs text-gray-500">
+                            {detail ? formatCurrency(-detail.amount) : '-'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ));
+                })()}
                 
                 {/* Transfers */}
                 <tr key={`cf-${account.id}-transfer`} className="bg-white">
@@ -649,21 +677,39 @@ export function SpreadsheetView({ forecast, accounts, events = [], showEventHigh
                   })}
                 </tr>
                 
-                {/* Growth */}
+                {/* Growth / Interest (for liabilities) */}
                 <tr key={`cf-${account.id}-growth`} className="bg-white">
                   <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
-                    + Growth
+                    {isLiability ? '+ Interest Accrued' : '+ Growth'}
                   </td>
                   {years.map((yearData) => {
                     const result = yearData.accounts.find(a => a.accountId === account.id);
                     const value = result?.growth ?? 0;
                     return (
-                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value > 0 ? 'text-blue-600' : value < 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${isLiability ? (value > 0 ? 'text-red-600' : 'text-gray-400') : (value > 0 ? 'text-blue-600' : value < 0 ? 'text-red-600' : 'text-gray-400')}`}>
                         {value !== 0 ? formatCurrency(value) : '-'}
                       </td>
                     );
                   })}
                 </tr>
+                
+                {/* Interest Paid (for liabilities only) - interest is always paid */}
+                {isLiability && (
+                  <tr key={`cf-${account.id}-interest-paid`} className="bg-white">
+                    <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
+                      − Interest Paid
+                    </td>
+                    {years.map((yearData) => {
+                      const result = yearData.accounts.find(a => a.accountId === account.id);
+                      const value = result?.growth ?? 0; // Interest paid equals interest accrued
+                      return (
+                        <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                          {value !== 0 ? formatCurrency(-value) : '-'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                )}
                 
                 {/* Closing Balance */}
                 <tr key={`cf-${account.id}-close`} className="bg-gray-50">

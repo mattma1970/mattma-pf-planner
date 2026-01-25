@@ -155,6 +155,26 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           fundedFromAccountId: fundingAccountId,
           fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
         });
+        
+        // Pay off any liabilities linked to this asset
+        for (const liability of accounts) {
+          if (liability.type === 'liability' && liability.payoffFromAccountId === account.id) {
+            const liabilityBalance = accountValues.get(liability.id) ?? liability.initialValue;
+            if (liabilityBalance > 0) {
+              // Reduce the transfer proceeds by liability amount
+              const payoffAmount = Math.min(liabilityBalance, transfer.amount);
+              lifecycleFlows.set(
+                transfer.destinationId,
+                (lifecycleFlows.get(transfer.destinationId) ?? 0) - payoffAmount
+              );
+              // Mark liability as paid off
+              lifecycleFlows.set(
+                liability.id,
+                (lifecycleFlows.get(liability.id) ?? 0) - liabilityBalance
+              );
+            }
+          }
+        }
       }
     }
 
@@ -197,7 +217,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     // PHASE 4 & 5: Process each account - apply growth and derived flows
     // ===========================================
     
-    const derivedFlows: { accountId: string; amount: number; type: 'contribution' | 'withdrawal' }[] = [];
+    const derivedFlows: { accountId: string; amount: number; type: 'contribution' | 'withdrawal'; description: string; sourceAccountId?: string; sourceAccountName?: string }[] = [];
 
     for (const account of accounts) {
       const isActive = isAccountActive(account, year, persons);
@@ -244,7 +264,13 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         }
         
         // PHASE 4: Apply growth (only if balance > 0)
-        if (balanceForGrowth > 0) {
+        // Skip growth for liabilities - interest is handled separately in liability processing phase
+        if (account.type === 'liability') {
+          // For liabilities, just track the opening balance + any transfers
+          // Interest will be calculated in the liability processing phase
+          projectedValue = openingValue + lifecycleChange + userTransferChange;
+          growth = 0;
+        } else if (balanceForGrowth > 0) {
           const yearsSinceStart = year - (accountStartYears.get(account.id) ?? year) + 1;
           projectedValue = projectAccountValue(account, year, balanceForGrowth, resolvedAssumptions, yearsSinceStart);
           growth = projectedValue - balanceForGrowth;
@@ -283,22 +309,24 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
 
         // PHASE 5: Derived flows
         if (account.type === 'income' && account.depositsToAccountId) {
-          derivedFlows.push({ accountId: account.depositsToAccountId, amount: projectedValue, type: 'contribution' });
+          derivedFlows.push({ accountId: account.depositsToAccountId, amount: projectedValue, type: 'contribution', description: `Income: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
         }
         if (account.type === 'expense' && account.fundedByAccountId) {
-          derivedFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal' });
+          derivedFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal', description: `Expense: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
         }
         if (account.type === 'asset' && account.returnRate && account.incomeTargetAccountId && balanceForGrowth > 0) {
           const incomeGenerated = balanceForGrowth * account.returnRate;
-          derivedFlows.push({ accountId: account.incomeTargetAccountId, amount: incomeGenerated, type: 'contribution' });
+          derivedFlows.push({ accountId: account.incomeTargetAccountId, amount: incomeGenerated, type: 'contribution', description: `Return: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
         }
         if (account.type === 'asset' && account.fundedByAccountId) {
-          let fundingAmount = contributions - withdrawals + growth;
+          // Only fund actual cash contributions, NOT unrealized growth (appreciation)
+          // Growth is paper value increase - no cash changes hands
+          let fundingAmount = contributions - withdrawals;
           if (isFirstActiveYear) {
             fundingAmount += account.initialValue;
           }
           if (fundingAmount > 0) {
-            derivedFlows.push({ accountId: account.fundedByAccountId, amount: fundingAmount, type: 'withdrawal' });
+            derivedFlows.push({ accountId: account.fundedByAccountId, amount: fundingAmount, type: 'withdrawal', description: `Fund asset: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
           }
         }
       } else if (isLifecycleEnding) {
@@ -316,10 +344,10 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         }
 
         if (account.type === 'income' && account.depositsToAccountId && account.endBehavior === 'hold') {
-          derivedFlows.push({ accountId: account.depositsToAccountId, amount: projectedValue, type: 'contribution' });
+          derivedFlows.push({ accountId: account.depositsToAccountId, amount: projectedValue, type: 'contribution', description: `Income (held): ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
         }
         if (account.type === 'expense' && account.fundedByAccountId && account.endBehavior === 'hold') {
-          derivedFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal' });
+          derivedFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal', description: `Expense (held): ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
         }
       }
 
@@ -375,6 +403,18 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           result.endValue -= flow.amount;
         }
         accountValues.set(flow.accountId, result.endValue);
+        
+        // Track cashflow detail
+        if (!result.cashflowDetails) {
+          result.cashflowDetails = [];
+        }
+        result.cashflowDetails.push({
+          description: flow.description,
+          amount: flow.amount,
+          type: flow.type,
+          sourceAccountId: flow.sourceAccountId,
+          sourceAccountName: flow.sourceAccountName,
+        });
       }
     }
 
@@ -400,23 +440,160 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         const topupAmount = targetBalance - result.endValue;
         
         if (topupAmount > 0) {
+          const sourceAccount = accounts.find(a => a.id === account.autoTopup!.fromAccountId);
+          
           // Apply topup to target account
           result.contributions += topupAmount;
           result.endValue += topupAmount;
           result.autoTopupApplied = true;
           accountValues.set(account.id, result.endValue);
+          if (!result.cashflowDetails) result.cashflowDetails = [];
+          result.cashflowDetails.push({
+            description: `Auto top-up from: ${sourceAccount?.name ?? 'Unknown'}`,
+            amount: topupAmount,
+            type: 'contribution',
+            sourceAccountId: account.autoTopup.fromAccountId,
+            sourceAccountName: sourceAccount?.name,
+          });
           
           // Withdraw from source account (allow negative balance)
           sourceResult.withdrawals += topupAmount;
           sourceResult.endValue -= topupAmount;
           sourceResult.autoTopupApplied = true;
           accountValues.set(account.autoTopup.fromAccountId, sourceResult.endValue);
+          if (!sourceResult.cashflowDetails) sourceResult.cashflowDetails = [];
+          sourceResult.cashflowDetails.push({
+            description: `Auto top-up to: ${account.name}`,
+            amount: topupAmount,
+            type: 'withdrawal',
+            sourceAccountId: account.id,
+            sourceAccountName: account.name,
+          });
         }
       }
     }
 
     // ===========================================
-    // PHASE 7: Tax calculations
+    // PHASE 7: Liability interest and payment processing
+    // ===========================================
+    
+    for (const account of accounts) {
+      if (account.type !== 'liability') continue;
+      
+      const result = accountResults.get(account.id);
+      if (!result) continue;
+      
+      // Skip if liability is already paid off
+      if (result.endValue <= 0) continue;
+      
+      const interestRate = account.interestRate ?? 0;
+      
+      // Calculate effective balance for interest (considering offset account)
+      let effectiveBalance = result.endValue;
+      if (account.offsetAccountId) {
+        const offsetResult = accountResults.get(account.offsetAccountId);
+        if (offsetResult) {
+          effectiveBalance = Math.max(0, result.endValue - offsetResult.endValue);
+        }
+      }
+      
+      // Calculate interest
+      const interestAmount = effectiveBalance * interestRate;
+      
+      // Calculate payment amount
+      let paymentAmount = account.annualPayment ?? 0;
+      
+      if (account.calculatePayment && account.endCondition) {
+        // Auto-calculate payment to pay off by end date using amortization formula
+        // Use effective balance (considering offset) for accurate payment calculation
+        const owner = persons.find(p => p.id === account.owner);
+        let endYear: number;
+        if (account.endCondition.type === 'year') {
+          endYear = account.endCondition.year;
+        } else if (account.endCondition.type === 'age' && owner) {
+          endYear = owner.birthYear + account.endCondition.age;
+        } else {
+          endYear = year + 30; // Default to 30 years if no end condition
+        }
+        
+        const yearsRemaining = Math.max(1, endYear - year + 1);
+        
+        // Calculate payment needed to pay off the FULL balance by end date,
+        // but using the EFFECTIVE interest rate (reduced by offset)
+        // This gives the correct payment: interest on effective balance + principal reduction
+        if (interestRate > 0 && effectiveBalance > 0) {
+          // With offset account: interest is charged on effective balance,
+          // but we're paying down the full principal
+          const principalToPay = result.endValue;
+          
+          // Calculate required principal payment per year to pay off by end date
+          // Payment = principal / years remaining + interest on effective balance
+          const principalPaymentPerYear = principalToPay / yearsRemaining;
+          paymentAmount = principalPaymentPerYear + interestAmount;
+        } else if (interestRate > 0) {
+          // Effective balance is 0 (offset >= balance), just pay principal
+          paymentAmount = result.endValue / yearsRemaining;
+        } else {
+          // No interest: simple division
+          paymentAmount = result.endValue / yearsRemaining;
+        }
+      }
+      
+      // For interest-only, payment only covers interest
+      if (account.paymentType === 'interestOnly') {
+        paymentAmount = interestAmount;
+      }
+      
+      // Cap payment at remaining balance + interest (don't overpay)
+      const maxPayment = result.endValue + interestAmount;
+      paymentAmount = Math.min(paymentAmount, maxPayment);
+      
+      // Calculate principal reduction
+      // For interest-only, the payment covers interest so principal unchanged
+      // For P&I, the payment covers interest + principal reduction
+      const principalReduction = account.paymentType === 'interestOnly' 
+        ? 0 
+        : Math.max(0, paymentAmount - interestAmount);
+      
+      // Update liability balance
+      // Interest is tracked for display but the net balance change depends on payment type
+      result.growth = interestAmount; // Interest accrued (shown for transparency)
+      result.withdrawals = principalReduction; // Principal reduction
+      
+      // For interest-only: balance stays same (interest is paid off each year)
+      // For P&I: balance = balance + interest - payment = balance - principal reduction
+      if (account.paymentType === 'interestOnly') {
+        // Interest paid, balance unchanged
+        result.endValue = result.endValue;
+      } else {
+        // P&I: add interest, subtract the full payment, but cap at not going negative
+        result.endValue = Math.max(0, result.endValue + interestAmount - paymentAmount);
+      }
+      accountValues.set(account.id, result.endValue);
+      
+      // Withdraw payment from funding account
+      if (account.fundedByAccountId && paymentAmount > 0) {
+        const fundingResult = accountResults.get(account.fundedByAccountId);
+        if (fundingResult) {
+          fundingResult.withdrawals += paymentAmount;
+          fundingResult.endValue -= paymentAmount;
+          accountValues.set(account.fundedByAccountId, fundingResult.endValue);
+          
+          // Track cashflow detail
+          if (!fundingResult.cashflowDetails) fundingResult.cashflowDetails = [];
+          fundingResult.cashflowDetails.push({
+            description: `Liability: ${account.name}`,
+            amount: paymentAmount,
+            type: 'withdrawal',
+            sourceAccountId: account.id,
+            sourceAccountName: account.name,
+          });
+        }
+      }
+    }
+
+    // ===========================================
+    // PHASE 8: Tax calculations
     // ===========================================
     
     const taxEvents: TaxEvent[] = [];
@@ -542,6 +719,14 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           fundingResult.withdrawals += calculatedTax;
           fundingResult.endValue -= calculatedTax;
           accountValues.set(fundedFromAccountId, fundingResult.endValue);
+          
+          // Track cashflow detail
+          if (!fundingResult.cashflowDetails) fundingResult.cashflowDetails = [];
+          fundingResult.cashflowDetails.push({
+            description: `Tax payment (${agg.taxSchedule === 'flatRate15' ? '15% flat' : 'marginal rates'})`,
+            amount: calculatedTax,
+            type: 'withdrawal',
+          });
         }
       }
     }

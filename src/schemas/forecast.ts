@@ -8,6 +8,15 @@ export const ResolvedAssumptionsSchema = z.object({
 });
 export type ResolvedAssumptions = z.infer<typeof ResolvedAssumptionsSchema>;
 
+export const CashflowItemSchema = z.object({
+  description: z.string(),
+  amount: z.number(),
+  type: z.enum(['contribution', 'withdrawal']),
+  sourceAccountId: z.string().optional(),
+  sourceAccountName: z.string().optional(),
+});
+export type CashflowItem = z.infer<typeof CashflowItemSchema>;
+
 export const AccountYearResultSchema = z.object({
   accountId: z.string().uuid(),
   year: z.number().int(),
@@ -18,6 +27,7 @@ export const AccountYearResultSchema = z.object({
   transfers: z.number(),
   endValue: z.number(),
   autoTopupApplied: z.boolean().optional(),
+  cashflowDetails: z.array(CashflowItemSchema).optional(),
 });
 export type AccountYearResult = z.infer<typeof AccountYearResultSchema>;
 

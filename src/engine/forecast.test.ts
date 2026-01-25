@@ -672,4 +672,432 @@ describe('calculateForecast', () => {
       expect(pension2025.endValue).toBe(-20000);
     });
   });
+
+  describe('liability calculations', () => {
+    it('accrues interest on liability balance', () => {
+      const bankAccount: Account = {
+        id: 'bank-1111-1111-1111-111111111111',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const mortgage: Account = {
+        id: 'mort-1111-1111-1111-111111111111',
+        name: 'Mortgage',
+        type: 'liability',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0.06, // 6% interest
+        paymentType: 'interestOnly',
+        fundedByAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, mortgage],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const mortResult = result.years[0].accounts.find(a => a.accountId === mortgage.id)!;
+      const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      
+      // Interest only: $500k * 6% = $30k interest
+      expect(mortResult.growth).toBe(30000); // Interest accrued
+      expect(mortResult.endValue).toBe(500000); // Balance unchanged (interest only)
+      
+      // Bank pays $30k interest
+      expect(bankResult.withdrawals).toBe(30000);
+      expect(bankResult.endValue).toBe(70000); // $100k - $30k
+    });
+
+    it('reduces principal with P&I payments', () => {
+      const bankAccount: Account = {
+        id: 'bank-2222-2222-2222-222222222222',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const mortgage: Account = {
+        id: 'mort-2222-2222-2222-222222222222',
+        name: 'Mortgage',
+        type: 'liability',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0.05, // 5% interest
+        paymentType: 'principalAndInterest',
+        annualPayment: 25000, // Fixed payment
+        fundedByAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, mortgage],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const mortResult = result.years[0].accounts.find(a => a.accountId === mortgage.id)!;
+      
+      // Interest: $100k * 5% = $5k
+      // Principal reduction: $25k - $5k = $20k
+      // End value: $100k + $5k - $25k = $80k (or $100k - $20k principal = $80k)
+      expect(mortResult.growth).toBe(5000); // Interest
+      expect(mortResult.withdrawals).toBe(20000); // Principal paid
+      expect(mortResult.endValue).toBe(80000); // $100k + $5k interest - $25k payment
+    });
+
+    it('applies offset account to reduce interest', () => {
+      const bankAccount: Account = {
+        id: 'bank-3333-3333-3333-333333333333',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const offsetAccount: Account = {
+        id: 'offset-3333-3333-3333-333333333333',
+        name: 'Offset',
+        type: 'asset',
+        initialValue: 200000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const mortgage: Account = {
+        id: 'mort-3333-3333-3333-333333333333',
+        name: 'Mortgage',
+        type: 'liability',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0.06, // 6% interest
+        paymentType: 'interestOnly',
+        fundedByAccountId: bankAccount.id,
+        offsetAccountId: offsetAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, offsetAccount, mortgage],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const mortResult = result.years[0].accounts.find(a => a.accountId === mortgage.id)!;
+      
+      // Effective balance: $500k - $200k = $300k
+      // Interest: $300k * 6% = $18k (not $30k)
+      expect(mortResult.growth).toBe(18000);
+    });
+
+    it('calculates correct payment with offset account and auto-calculate', () => {
+      const bankAccount: Account = {
+        id: 'bank-6666-6666-6666-666666666666',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const offsetAccount: Account = {
+        id: 'offset-6666-6666-6666-666666666666',
+        name: 'Offset',
+        type: 'asset',
+        initialValue: 200000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const mortgage: Account = {
+        id: 'mort-6666-6666-6666-666666666666',
+        name: 'Mortgage',
+        type: 'liability',
+        initialValue: 300000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0.06, // 6% interest
+        paymentType: 'principalAndInterest',
+        calculatePayment: true,
+        endCondition: { type: 'year', year: 2027 }, // 3 year loan
+        fundedByAccountId: bankAccount.id,
+        offsetAccountId: offsetAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, offsetAccount, mortgage],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const mortResult = result.years[0].accounts.find(a => a.accountId === mortgage.id)!;
+      const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      
+      // Effective balance: $300k - $200k = $100k
+      // Interest: $100k * 6% = $6k
+      expect(mortResult.growth).toBe(6000);
+      
+      // Payment should be: principal/years + interest = $100k + $6k = $106k
+      // Principal portion: $300k / 3 = $100k
+      // Total payment: $100k + $6k = $106k
+      const expectedPayment = 100000 + 6000;
+      expect(bankResult.withdrawals).toBe(expectedPayment);
+      
+      // Mortgage balance after: $300k + $6k interest - $106k payment = $200k
+      expect(mortResult.endValue).toBe(200000);
+    });
+
+    it('bank withdrawals match liability payment exactly', () => {
+      const bankAccount: Account = {
+        id: 'bank-7777-7777-7777-777777777777',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 200000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const mortgage: Account = {
+        id: 'mort-7777-7777-7777-777777777777',
+        name: 'Mortgage',
+        type: 'liability',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0.05, // 5% interest
+        paymentType: 'principalAndInterest',
+        annualPayment: 30000, // Fixed $30k payment
+        fundedByAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, mortgage],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const mortResult = result.years[0].accounts.find(a => a.accountId === mortgage.id)!;
+      const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      
+      // Interest: $100k * 5% = $5k
+      // Payment: $30k
+      // Principal reduction: $30k - $5k = $25k
+      expect(mortResult.growth).toBe(5000); // Interest accrued
+      expect(mortResult.withdrawals).toBe(25000); // Principal paid
+      
+      // Bank withdrawal should equal the total payment (interest + principal)
+      expect(bankResult.withdrawals).toBe(30000);
+      
+      // Verify the math reconciles:
+      // Mortgage: $100k + $5k interest - $30k payment = $75k
+      expect(mortResult.endValue).toBe(75000);
+      // Bank: $200k - $30k payment = $170k
+      expect(bankResult.endValue).toBe(170000);
+    });
+
+    it('liability growthProfile is ignored (interest handled separately)', () => {
+      // This test ensures liabilities don't get double-processed:
+      // growthProfile should be ignored since interest is calculated separately
+      const bankAccount: Account = {
+        id: 'bank-9999-9999-9999-999999999999',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 200000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const mortgage: Account = {
+        id: 'mort-9999-9999-9999-999999999999',
+        name: 'Mortgage',
+        type: 'liability',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0.03 }, // This should be IGNORED
+        interestRate: 0.06, // Only this should be used
+        paymentType: 'interestOnly',
+        fundedByAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, mortgage],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const mortResult = result.years[0].accounts.find(a => a.accountId === mortgage.id)!;
+      const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      
+      // Interest should only be 6% of $100k = $6k
+      // NOT 6% + 3% = 9%
+      expect(mortResult.growth).toBe(6000);
+      
+      // Payment should only be $6k (interest only)
+      expect(bankResult.withdrawals).toBe(6000);
+      
+      // Balance should remain $100k (interest-only loan)
+      expect(mortResult.endValue).toBe(100000);
+    });
+
+    it('offset account larger than mortgage results in zero interest', () => {
+      const bankAccount: Account = {
+        id: 'bank-8888-8888-8888-888888888888',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const offsetAccount: Account = {
+        id: 'offset-8888-8888-8888-888888888888',
+        name: 'Offset',
+        type: 'asset',
+        initialValue: 600000, // Larger than mortgage
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const mortgage: Account = {
+        id: 'mort-8888-8888-8888-888888888888',
+        name: 'Mortgage',
+        type: 'liability',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0.06, // 6% interest
+        paymentType: 'interestOnly',
+        fundedByAccountId: bankAccount.id,
+        offsetAccountId: offsetAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, offsetAccount, mortgage],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const mortResult = result.years[0].accounts.find(a => a.accountId === mortgage.id)!;
+      const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      
+      // Effective balance: max(0, $500k - $600k) = $0
+      // Interest: $0 * 6% = $0
+      expect(mortResult.growth).toBe(0);
+      
+      // No payment needed for interest-only with zero interest
+      expect(bankResult.withdrawals).toBe(0);
+    });
+
+    it('pays off liability when linked asset sells', () => {
+      const bankAccount: Account = {
+        id: 'bank-4444-4444-4444-444444444444',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 50000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const property: Account = {
+        id: 'prop-4444-4444-4444-444444444444',
+        name: 'Investment Property',
+        type: 'asset',
+        initialValue: 800000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sell',
+        transferToAccountId: bankAccount.id,
+        costBase: 600000,
+      };
+
+      const propertyLoan: Account = {
+        id: 'loan-4444-4444-4444-444444444444',
+        name: 'Property Loan',
+        type: 'liability',
+        initialValue: 300000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0.065,
+        paymentType: 'interestOnly',
+        fundedByAccountId: bankAccount.id,
+        payoffFromAccountId: property.id, // Pay off when property sells
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, property, propertyLoan],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      const loanResult = result.years[0].accounts.find(a => a.accountId === propertyLoan.id)!;
+      
+      // Loan paid off: balance should be 0 or negative
+      expect(loanResult.endValue).toBeLessThanOrEqual(0);
+      
+      // Bank receives: $50k + ($800k - $300k loan payoff) = $550k
+      // But before any interest calculations
+      expect(bankResult.endValue).toBeGreaterThan(400000);
+    });
+
+    it('auto-calculates payment to pay off by end date', () => {
+      const bankAccount: Account = {
+        id: 'bank-5555-5555-5555-555555555555',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 200000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      };
+
+      const carLoan: Account = {
+        id: 'loan-5555-5555-5555-555555555555',
+        name: 'Car Loan',
+        type: 'liability',
+        initialValue: 30000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0.08, // 8% interest
+        paymentType: 'principalAndInterest',
+        calculatePayment: true,
+        endCondition: { type: 'year', year: 2027 }, // 3 year loan
+        fundedByAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, carLoan],
+        assumptions: defaultAssumptions,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const loan2027 = result.years.find(y => y.year === 2027)!.accounts.find(a => a.accountId === carLoan.id)!;
+      
+      // Loan should be nearly paid off by end year (allow small remainder due to rounding)
+      expect(loan2027.endValue).toBeLessThan(2000); // Should be significantly reduced
+      expect(loan2027.endValue).toBeLessThan(result.years[0].accounts.find(a => a.accountId === carLoan.id)!.endValue);
+    });
+  });
 });
