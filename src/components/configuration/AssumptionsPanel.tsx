@@ -9,18 +9,10 @@ interface AssumptionsPanelProps {
 
 export function AssumptionsPanel({ assumptions, onSave }: AssumptionsPanelProps) {
   const [cpiBase, setCpiBase] = useState(assumptions.cpi.baseValue.toString());
-  const [investmentGrowthBase, setInvestmentGrowthBase] = useState(
-    assumptions.investmentGrowth.baseValue.toString()
-  );
-  const [superGrowthBase, setSuperGrowthBase] = useState(
-    assumptions.superGrowth.baseValue.toString()
-  );
   const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {
     setCpiBase(assumptions.cpi.baseValue.toString());
-    setInvestmentGrowthBase(assumptions.investmentGrowth.baseValue.toString());
-    setSuperGrowthBase(assumptions.superGrowth.baseValue.toString());
     setIsDirty(false);
   }, [assumptions]);
 
@@ -35,22 +27,12 @@ export function AssumptionsPanel({ assumptions, onSave }: AssumptionsPanelProps)
         ...assumptions.cpi,
         baseValue: parseFloat(cpiBase) || 0,
       },
-      investmentGrowth: {
-        ...assumptions.investmentGrowth,
-        baseValue: parseFloat(investmentGrowthBase) || 0,
-      },
-      superGrowth: {
-        ...assumptions.superGrowth,
-        baseValue: parseFloat(superGrowthBase) || 0,
-      },
     });
     setIsDirty(false);
   };
 
   const handleReset = () => {
     setCpiBase(assumptions.cpi.baseValue.toString());
-    setInvestmentGrowthBase(assumptions.investmentGrowth.baseValue.toString());
-    setSuperGrowthBase(assumptions.superGrowth.baseValue.toString());
     setIsDirty(false);
   };
 
@@ -65,22 +47,6 @@ export function AssumptionsPanel({ assumptions, onSave }: AssumptionsPanelProps)
           step="0.1"
           value={cpiBase}
           onChange={handleChange(setCpiBase)}
-        />
-
-        <Input
-          label="Investment Growth Base Rate (%)"
-          type="number"
-          step="0.1"
-          value={investmentGrowthBase}
-          onChange={handleChange(setInvestmentGrowthBase)}
-        />
-
-        <Input
-          label="Super Growth Base Rate (%)"
-          type="number"
-          step="0.1"
-          value={superGrowthBase}
-          onChange={handleChange(setSuperGrowthBase)}
         />
 
         <p className="text-xs text-gray-500">

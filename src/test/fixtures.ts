@@ -87,8 +87,6 @@ export const sampleAssumptionProfileWithFormula: AssumptionProfile = {
 
 export const sampleResolvedAssumptions: ResolvedAssumptions = {
   cpi: 0.025,
-  investmentGrowth: 0.06,
-  superGrowth: 0.07,
 };
 
 export const sampleEpochs: Epoch[] = [

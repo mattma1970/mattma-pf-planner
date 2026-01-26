@@ -95,9 +95,14 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         accountStartYears.set(account.id, year);
       }
 
+      // Pass-through income accounts start from 0 each year (only show contributions)
+      // Regular income accounts carry forward with growth
+      // Other accounts carry forward their balance
       const openingValue = isFirstActiveYear
         ? account.initialValue
-        : (accountValues.get(account.id) ?? account.initialValue);
+        : (account.type === 'income' && account.passThrough)
+          ? 0
+          : (accountValues.get(account.id) ?? account.initialValue);
 
       // Check if this account ends this year with a transfer/sell
       if (isActive) {
@@ -314,7 +319,13 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
 
         // PHASE 5: Derived flows
         if (account.type === 'income' && account.depositsToAccountId) {
-          derivedFlows.push({ accountId: account.depositsToAccountId, amount: projectedValue, type: 'contribution', description: `Income: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
+          // Pass-through: deposit only contributions; Regular: deposit projectedValue + contributions
+          const totalIncomeToDeposit = account.passThrough
+            ? contributions
+            : projectedValue + contributions;
+          if (totalIncomeToDeposit > 0) {
+            derivedFlows.push({ accountId: account.depositsToAccountId, amount: totalIncomeToDeposit, type: 'contribution', description: `Income: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
+          }
         }
         if (account.type === 'expense' && account.fundedByAccountId) {
           derivedFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal', description: `Expense: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
@@ -369,15 +380,24 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       accountValues.set(account.id, endValue);
 
       if (account.type === 'income') {
-        totalIncome += projectedValue;
+        // For pass-through accounts, taxable income is just contributions received
+        // For regular income accounts, it's projectedValue + contributions
+        const taxableIncome = account.passThrough
+          ? contributions
+          : projectedValue + contributions;
+        totalIncome += taxableIncome;
         // Track income per account for itemized tax events (skip tax-free income)
-        if (projectedValue > 0 && account.incomeTaxTreatment !== 'taxFree') {
+        if (taxableIncome > 0 && account.incomeTaxTreatment !== 'taxFree') {
           incomeByAccount.push({
             accountId: account.id,
             accountName: account.name,
-            amount: projectedValue,
+            amount: taxableIncome,
             fundedFromAccountId: account.taxFundedFromAccountId,
           });
+        }
+        // For pass-through: show contributions only, for regular: show full taxable income
+        if (account.passThrough) {
+          endValue = contributions;
         }
       } else if (account.type === 'expense') {
         totalExpenses += projectedValue;
@@ -812,15 +832,15 @@ function resolveAssumptions(
 ): ResolvedAssumptions {
   const sortedEpochs = [...epochs].sort((a, b) => a.order - b.order);
   
-  const getEpochValue = (key: 'cpi' | 'investmentGrowth' | 'superGrowth'): number | undefined => {
+  const getCpiForEpoch = (): number | undefined => {
     for (let i = sortedEpochs.length - 1; i >= 0; i--) {
       const epoch = sortedEpochs[i];
       if (year >= epoch.startYear && year <= epoch.endYear) {
-        const override = epoch.globalAssumptions?.[key];
+        const override = epoch.globalAssumptions?.cpi;
         if (override !== undefined) return override;
         
         for (let j = i - 1; j >= 0; j--) {
-          const prevOverride = sortedEpochs[j].globalAssumptions?.[key];
+          const prevOverride = sortedEpochs[j].globalAssumptions?.cpi;
           if (prevOverride !== undefined) return prevOverride;
         }
         break;
@@ -829,20 +849,10 @@ function resolveAssumptions(
     return undefined;
   };
 
-  const cpiOverride = getEpochValue('cpi');
+  const cpiOverride = getCpiForEpoch();
   const cpi = cpiOverride ?? resolveAssumptionForYear(assumptions.cpi, year);
 
-  const investmentGrowthOverride = getEpochValue('investmentGrowth');
-  const investmentGrowth = investmentGrowthOverride ?? resolveAssumptionForYear(assumptions.investmentGrowth, year, cpi);
-
-  const superGrowthOverride = getEpochValue('superGrowth');
-  const superGrowth = superGrowthOverride ?? resolveAssumptionForYear(assumptions.superGrowth, year, cpi);
-
-  return {
-    cpi,
-    investmentGrowth,
-    superGrowth,
-  };
+  return { cpi };
 }
 
 function getAccountAssumptionForEpoch(

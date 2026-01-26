@@ -6,8 +6,6 @@ import { defaultSettings } from '../schemas';
 describe('calculateForecast', () => {
   const defaultAssumptions: Assumptions = {
     cpi: { baseValue: 0.03 },
-    investmentGrowth: { baseValue: 0.05 },
-    superGrowth: { baseValue: 0.07 },
   };
 
   const testSettings: Settings = { ...defaultSettings };

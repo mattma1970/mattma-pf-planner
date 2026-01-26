@@ -10,8 +10,6 @@ export type AssumptionProfile = z.infer<typeof AssumptionProfileSchema>;
 export const AssumptionsSchema = z.object({
   id: z.string().uuid().optional(),
   cpi: AssumptionProfileSchema,
-  investmentGrowth: AssumptionProfileSchema,
-  superGrowth: AssumptionProfileSchema,
   startYear: z.number().int().optional(),
   endYear: z.number().int().optional(),
 });

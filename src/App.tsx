@@ -130,7 +130,7 @@ function App() {
                 </Button>
               </div>
               <Button variant="secondary" onClick={() => setShowSettings(true)}>
-                Settings
+                Defaults
               </Button>
             </div>
             <SpreadsheetView
@@ -214,7 +214,7 @@ function App() {
         forecast={forecast}
         onSave={handleSaveEvent}
       />
-      <Modal isOpen={showSettings} onClose={() => setShowSettings(false)} title="Settings">
+      <Modal isOpen={showSettings} onClose={() => setShowSettings(false)} title="Defaults">
         <div className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">

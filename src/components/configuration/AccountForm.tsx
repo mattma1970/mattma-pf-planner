@@ -81,6 +81,7 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
   // Tax settings
   const [incomeTaxTreatment, setIncomeTaxTreatment] = useState<IncomeTaxTreatment | ''>(account?.incomeTaxTreatment ?? '');
   const [taxFundedFromAccountId, setTaxFundedFromAccountId] = useState(account?.taxFundedFromAccountId ?? '');
+  const [passThrough, setPassThrough] = useState(account?.passThrough ?? false);
   
   // CGT settings for assets with endBehavior: 'sell'
   const [costBase, setCostBase] = useState(account?.costBase?.toString() ?? '');
@@ -103,6 +104,7 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
 
   const otherAccounts = accounts.filter((a) => a.id !== account?.id);
   const assetAccounts = accounts.filter((a) => a.type === 'asset' && a.id !== account?.id);
+  const passThroughIncomeAccounts = accounts.filter((a) => a.type === 'income' && a.passThrough && a.id !== account?.id);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -167,6 +169,7 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
       // Tax settings
       incomeTaxTreatment: type === 'income' && incomeTaxTreatment ? incomeTaxTreatment : undefined,
       taxFundedFromAccountId: taxFundedFromAccountId || undefined,
+      passThrough: type === 'income' ? passThrough : undefined,
       
       // CGT settings (for assets with sell behavior)
       costBase: type === 'asset' && isSellBehavior && costBase ? parseFloat(costBase) : undefined,
@@ -232,6 +235,20 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
             <option value="taxable">Taxable</option>
             <option value="taxFree">Tax Free</option>
           </Select>
+          <div className="col-span-2">
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={passThrough}
+                onChange={(e) => setPassThrough(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Pass-through (no balance carried forward)
+            </label>
+            <p className="text-xs text-gray-500 mt-1 ml-6">
+              Enable for dividend/return income. Balance resets each year - only shows contributions received.
+            </p>
+          </div>
         </>
       )}
 
@@ -363,11 +380,15 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
               onChange={(e) => setIncomeTargetAccountId(e.target.value)}
             >
               <option value="">None</option>
-              {assetAccounts.map((a) => (
+              {passThroughIncomeAccounts.map((a) => (
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
             </Select>
           </div>
+          <p className="text-xs text-gray-500 mt-2">
+            Only pass-through income accounts can receive investment returns.
+            Create an income account with "Pass-through" enabled (e.g., "Dividend Income") that deposits to your bank account.
+          </p>
         </div>
       )}
 

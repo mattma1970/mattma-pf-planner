@@ -79,6 +79,9 @@ export const AccountSchema = z.object({
   // Auto-topup: automatically transfer from another account when balance falls below threshold
   autoTopup: AutoTopupSchema.optional(),
   
+  // Income-specific fields
+  passThrough: z.boolean().optional(), // If true, balance doesn't carry forward (e.g., dividends)
+  
   // Liability-specific fields
   interestRate: z.number().optional(), // Annual interest rate as decimal (0.065 for 6.5%)
   paymentType: LiabilityPaymentTypeSchema.optional(),

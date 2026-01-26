@@ -23,8 +23,6 @@ type EditingCell = {
 
 const GLOBAL_ROWS = [
   { key: 'cpi', label: 'CPI' },
-  { key: 'investmentGrowth', label: 'Investment Growth' },
-  { key: 'superGrowth', label: 'Super Growth' },
 ] as const;
 
 type GlobalKey = typeof GLOBAL_ROWS[number]['key'];

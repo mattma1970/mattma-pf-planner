@@ -13,7 +13,7 @@ export function Header({ onAddAccount, onShowAssumptions, onShowEvents }: Header
         <h1 className="text-xl font-bold text-gray-900">Retirement Planner</h1>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={onShowAssumptions}>
-            Settings
+          Assumptions
           </Button>
           <Button variant="secondary" onClick={onShowEvents}>
             Events

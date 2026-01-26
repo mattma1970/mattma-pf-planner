@@ -3,8 +3,6 @@ import { TaxEventSchema, TaxAggregationSchema } from './tax';
 
 export const ResolvedAssumptionsSchema = z.object({
   cpi: z.number(),
-  investmentGrowth: z.number(),
-  superGrowth: z.number(),
 });
 export type ResolvedAssumptions = z.infer<typeof ResolvedAssumptionsSchema>;
 

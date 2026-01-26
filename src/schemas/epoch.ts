@@ -2,8 +2,6 @@ import { z } from 'zod';
 
 export const EpochGlobalAssumptionsSchema = z.object({
   cpi: z.number().optional(),
-  investmentGrowth: z.number().optional(),
-  superGrowth: z.number().optional(),
 });
 export type EpochGlobalAssumptions = z.infer<typeof EpochGlobalAssumptionsSchema>;
 

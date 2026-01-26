@@ -8,8 +8,6 @@ export const DEFAULT_ASSUMPTIONS_ID = 'default-assumptions-id';
 export const defaultAssumptions: Assumptions = {
   id: DEFAULT_ASSUMPTIONS_ID,
   cpi: { baseValue: 0.03 },
-  investmentGrowth: { baseValue: 0.05 },
-  superGrowth: { baseValue: 0.07 },
   startYear: currentYear,
   endYear: currentYear + 40,
 };
