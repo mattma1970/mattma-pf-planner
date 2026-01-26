@@ -1152,16 +1152,28 @@ describe('calculateForecast', () => {
       const year2027 = result.years.find(y => y.year === 2027)!;
 
       // With no contributions, full cap ($30k) should be carried forward each year
+      // Now we have 2 items: concessionalCapAccount and nonConcessionalCapAccount
       expect(year2025.offBalanceSheet).toBeDefined();
-      expect(year2025.offBalanceSheet!.length).toBe(1);
-      expect(year2025.offBalanceSheet![0].type).toBe('carryForwardContribution');
-      expect(year2025.offBalanceSheet![0].value).toBe(30000);
+      expect(year2025.offBalanceSheet!.length).toBe(2);
+      
+      const conc2025 = year2025.offBalanceSheet!.find(i => i.type === 'concessionalCapAccount')!;
+      expect(conc2025.opening).toBe(30000); // $30k annual cap
+      expect(conc2025.movement).toBeCloseTo(0); // No contributions
+      expect(conc2025.closing).toBe(30000); // Full cap unused
 
-      // Year 2 should have 2 years of carry-forward
-      expect(year2026.offBalanceSheet![0].value).toBe(60000);
+      const nonConc2025 = year2025.offBalanceSheet!.find(i => i.type === 'nonConcessionalCapAccount')!;
+      expect(nonConc2025.opening).toBe(120000); // $120k annual cap
+      expect(nonConc2025.closing).toBe(120000); // Full cap unused
 
-      // Year 3 should have 3 years of carry-forward
-      expect(year2027.offBalanceSheet![0].value).toBe(90000);
+      // Year 2: opening includes prior year carry-forward
+      const conc2026 = year2026.offBalanceSheet!.find(i => i.type === 'concessionalCapAccount')!;
+      expect(conc2026.opening).toBe(60000); // $30k annual + $30k carry-forward
+      expect(conc2026.closing).toBe(60000);
+
+      // Year 3: 3 years of carry-forward
+      const conc2027 = year2027.offBalanceSheet!.find(i => i.type === 'concessionalCapAccount')!;
+      expect(conc2027.opening).toBe(90000); // $30k annual + $60k carry-forward
+      expect(conc2027.closing).toBe(90000);
     });
 
     it('reduces carry-forward when contributions are made', () => {
@@ -1176,6 +1188,7 @@ describe('calculateForecast', () => {
           source: 'salarySacrifice',
           memberPersonId: defaultPerson.id,
           reducesAssessableIncome: true,
+          exemptFromCap: false,
         },
       };
 
@@ -1194,16 +1207,24 @@ describe('calculateForecast', () => {
       const year2026 = result.years.find(y => y.year === 2026)!;
       const year2027 = result.years.find(y => y.year === 2027)!;
 
-      // Year 1: No contributions, full $30k carry-forward
-      expect(year2025.offBalanceSheet![0].value).toBe(30000);
+      // Year 1: No contributions, full $30k cap available
+      const conc2025 = year2025.offBalanceSheet!.find(i => i.type === 'concessionalCapAccount')!;
+      expect(conc2025.opening).toBe(30000);
+      expect(conc2025.closing).toBe(30000);
 
       // Year 2: $20k contribution, so only $10k unused from this year
-      // Total: $30k (year 1) + $10k (year 2) = $40k
-      expect(year2026.offBalanceSheet![0].value).toBe(40000);
+      // Opening: $30k (carry-forward) + $30k (annual) = $60k
+      // Closing: $60k - $20k = $40k
+      const conc2026 = year2026.offBalanceSheet!.find(i => i.type === 'concessionalCapAccount')!;
+      expect(conc2026.opening).toBe(60000);
+      expect(conc2026.movement).toBe(-20000);
+      expect(conc2026.closing).toBe(40000);
 
       // Year 3: No contributions, full $30k added
-      // Total: $30k (year 1) + $10k (year 2) + $30k (year 3) = $70k
-      expect(year2027.offBalanceSheet![0].value).toBe(70000);
+      // Opening: $40k (carry-forward) + $30k (annual) = $70k
+      const conc2027 = year2027.offBalanceSheet!.find(i => i.type === 'concessionalCapAccount')!;
+      expect(conc2027.opening).toBe(70000);
+      expect(conc2027.closing).toBe(70000);
     });
   });
 
@@ -1245,6 +1266,7 @@ describe('calculateForecast', () => {
           source: 'employerSG',
           memberPersonId: person.id,
           reducesAssessableIncome: false,
+          exemptFromCap: false,
         },
       };
 
@@ -1296,6 +1318,7 @@ describe('calculateForecast', () => {
           source: 'employerSG',
           memberPersonId: person.id,
           reducesAssessableIncome: false,
+          exemptFromCap: false,
         },
       };
 
@@ -1335,6 +1358,7 @@ describe('calculateForecast', () => {
           source: 'salarySacrifice',
           memberPersonId: person.id,
           reducesAssessableIncome: true,
+          exemptFromCap: false,
         },
       };
 
@@ -1376,6 +1400,7 @@ describe('calculateForecast', () => {
           source: 'personalAfterTax',
           memberPersonId: person.id,
           reducesAssessableIncome: false,
+          exemptFromCap: false,
         },
       };
 
@@ -1398,6 +1423,183 @@ describe('calculateForecast', () => {
       expect(superResult.contributions).toBe(50000);
       expect(superResult.withdrawals).toBe(0);
       expect(superResult.endValue).toBe(100000 * 1.07 + 50000);
+    });
+
+    it('adds full contribution amount to super regardless of cap allocation', () => {
+      // Contribute $50k as concessional (exceeds $30k cap)
+      // Full $50k should go to super, only $30k taxed at 15%
+      const contributionEvent: Event = {
+        id: 'event-1111-1111-1111-111111111111',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Large concessional contribution',
+        amount: 50000,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'personalDeductible',
+          memberPersonId: person.id,
+          reducesAssessableIncome: true,
+          exemptFromCap: false,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [superAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [contributionEvent],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const superResult = year2025.accounts.find(a => a.accountId === superAccount.id)!;
+
+      // Full $50k contribution added
+      expect(superResult.contributions).toBe(50000);
+      
+      // Only 15% tax on $30k (within cap), not on $20k excess
+      // Tax = $30k * 0.15 = $4,500
+      expect(superResult.withdrawals).toBe(4500);
+      
+      // Super: 100k * 1.07 + 50k - 4.5k = 152.5k
+      expect(superResult.endValue).toBe(100000 * 1.07 + 50000 - 4500);
+    });
+
+    it('excess concessional reduces non-concessional cap in off-balance sheet', () => {
+      // $50k concessional (exceeds $30k cap by $20k)
+      // The $20k excess should reduce non-concessional cap
+      const contributionEvent: Event = {
+        id: 'event-1111-1111-1111-111111111111',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Large concessional',
+        amount: 50000,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'personalDeductible',
+          memberPersonId: person.id,
+          reducesAssessableIncome: true,
+          exemptFromCap: false,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [superAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [contributionEvent],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      
+      // Check concessional cap account
+      const concCap = year2025.offBalanceSheet!.find(i => i.type === 'concessionalCapAccount')!;
+      expect(concCap.opening).toBe(30000); // Annual cap
+      expect(concCap.movement).toBe(-50000); // Used full $50k (even though excess)
+      expect(concCap.closing).toBe(-20000); // Negative = exceeded by $20k
+      
+      // Check non-concessional cap account - should show $20k excess usage
+      const nonConcCap = year2025.offBalanceSheet!.find(i => i.type === 'nonConcessionalCapAccount')!;
+      expect(nonConcCap.opening).toBe(120000); // Annual cap
+      expect(nonConcCap.movement).toBe(-20000); // Excess concessional flows here
+      expect(nonConcCap.closing).toBe(100000);
+    });
+
+    it('does not add excess concessional back to assessable income', () => {
+      // $50k concessional (exceeds $30k cap)
+      // Should NOT create a tax event for excess being added to assessable income
+      const contributionEvent: Event = {
+        id: 'event-1111-1111-1111-111111111111',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Large concessional',
+        amount: 50000,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'personalDeductible',
+          memberPersonId: person.id,
+          reducesAssessableIncome: true,
+          exemptFromCap: false,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [superAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [contributionEvent],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      
+      // Should NOT have a tax event for "Excess concessional contributions"
+      const excessTaxEvent = year2025.taxEvents.find(e => 
+        e.description.toLowerCase().includes('excess')
+      );
+      expect(excessTaxEvent).toBeUndefined();
+      
+      // Only tax event should be the 15% contributions tax
+      const contribTaxEvent = year2025.taxEvents.find(e => 
+        e.type === 'superContributionTax'
+      );
+      expect(contribTaxEvent).toBeDefined();
+    });
+
+    it('exemptFromCap contributions bypass both cap calculations', () => {
+      // $300k downsizer contribution (exempt from cap)
+      // Should NOT affect non-concessional cap
+      const downsizer: Event = {
+        id: 'event-1111-1111-1111-111111111111',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Downsizer contribution',
+        amount: 300000,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'nonConcessional',
+          source: 'downsizer',
+          memberPersonId: person.id,
+          reducesAssessableIncome: false,
+          exemptFromCap: true,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [superAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [downsizer],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const superResult = year2025.accounts.find(a => a.accountId === superAccount.id)!;
+      
+      // Full $300k goes to super
+      expect(superResult.contributions).toBe(300000);
+      
+      // Non-concessional cap should be unchanged (exempt contribution doesn't count)
+      const nonConcCap = year2025.offBalanceSheet!.find(i => i.type === 'nonConcessionalCapAccount')!;
+      expect(nonConcCap.opening).toBe(120000);
+      expect(nonConcCap.movement).toBeCloseTo(0); // No movement from exempt contribution
+      expect(nonConcCap.closing).toBe(120000);
     });
   });
 });

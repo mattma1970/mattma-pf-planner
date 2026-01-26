@@ -4,6 +4,7 @@ import type { Event } from '../../schemas/event';
 import type { Account } from '../../schemas/account';
 import type { Person } from '../../schemas/person';
 import type { ForecastResult } from '../../schemas/forecast';
+import type { Settings } from '../../schemas/settings';
 
 interface EventModalProps {
   isOpen: boolean;
@@ -12,10 +13,11 @@ interface EventModalProps {
   accounts: Account[];
   persons?: Person[];
   forecast?: ForecastResult | null;
+  settings?: Settings;
   onSave: (data: Omit<Event, 'id'>) => void;
 }
 
-export function EventModal({ isOpen, onClose, event, accounts, persons, forecast, onSave }: EventModalProps) {
+export function EventModal({ isOpen, onClose, event, accounts, persons, forecast, settings, onSave }: EventModalProps) {
   const title = event ? 'Edit Event' : 'Add Event';
 
   const handleSubmit = (data: Omit<Event, 'id'>) => {
@@ -30,6 +32,7 @@ export function EventModal({ isOpen, onClose, event, accounts, persons, forecast
         accounts={accounts}
         persons={persons}
         forecast={forecast}
+        settings={settings}
         onSubmit={handleSubmit}
         onCancel={onClose}
       />

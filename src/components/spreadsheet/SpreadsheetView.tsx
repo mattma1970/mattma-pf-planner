@@ -213,7 +213,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
             valuesByYear: new Map(),
           });
         }
-        itemsById.get(item.id)!.valuesByYear.set(yearResult.year, item.value);
+        itemsById.get(item.id)!.valuesByYear.set(yearResult.year, item.value ?? item.closing ?? 0);
       }
     }
     
@@ -228,6 +228,8 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
     const typeLabels: Record<string, string> = {
       carryForwardContribution: 'Carry Forward Contributions',
       frankingCredits: 'Franking Credits',
+      concessionalCapAccount: 'Concessional Cap',
+      nonConcessionalCapAccount: 'Non-Concessional Cap',
     };
     
     return {

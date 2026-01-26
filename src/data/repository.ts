@@ -122,7 +122,7 @@ export class IndexedDBRepository implements DataRepository {
     return {
       ...defaultSettings,
       ...rest,
-      // Deep merge for nested objects
+      // Deep merge for nested objects (sourceConfigs is optional, use stored or undefined)
       super: { ...defaultSettings.super, ...rest.super },
     };
   }

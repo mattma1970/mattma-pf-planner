@@ -20,10 +20,13 @@ import { resolveAssumptionForYear } from './assumptions';
 import { isAccountActive, projectAccountValue, handleAccountTransfer, getAccountAcquisitionYear } from './accounts';
 import {
   initializeCarryForwardStates,
+  initializeNonConcessionalCapStates,
   aggregateContributionsByPerson,
   processPersonContributions,
-  createCarryForwardOffBalanceSheetItems,
+  createCapAccountOffBalanceSheetItems,
+  getContributionTaxCategory,
   type CarryForwardState,
+  type NonConcessionalCapState,
   type ContributionProcessingResult,
 } from './superContributions';
 import { calculateDiv293 } from './taxRules';
@@ -71,8 +74,10 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
   let peakAssets = 0;
   let peakAssetsYear = startYear;
   
-  // Initialize carry-forward state for super contributions
+  // Initialize carry-forward state for super contributions (concessional)
   let carryForwardStates = initializeCarryForwardStates(persons);
+  // Initialize non-concessional cap state (bring-forward tracking)
+  let nonConcessionalCapStates = initializeNonConcessionalCapStates(persons);
 
   for (let year = startYear; year <= endYear; year++) {
     const resolvedAssumptions = resolveAssumptions(assumptions, year, sortedEpochs);
@@ -263,12 +268,14 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         }
         
         // Track contributions by super account for tax calculations
+        // Map contribution types (including cap-exempt types) to concessional/nonConcessional
+        const taxCategory = getContributionTaxCategory(contributionType);
         const existing = superContributionsByAccount.get(event.targetAccountId) ?? { 
           concessional: 0, 
           nonConcessional: 0, 
           personId: memberPersonId 
         };
-        if (contributionType === 'concessional') {
+        if (taxCategory === 'concessional') {
           existing.concessional += event.amount;
         } else {
           existing.nonConcessional += event.amount;
@@ -721,9 +728,15 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         if (!superResult) continue;
         
         // Get or initialize carry-forward state for this person
-        const currentState = carryForwardStates.get(contribs.personId) ?? { 
+        const currentCarryForwardState = carryForwardStates.get(contribs.personId) ?? { 
           personId: contribs.personId, 
           unusedCaps: [] 
+        };
+        
+        // Get or initialize non-concessional cap state for this person
+        const currentNonConcCapState = nonConcessionalCapStates.get(contribs.personId) ?? {
+          personId: contribs.personId,
+          closingBalance: 0,
         };
         
         // Process contributions
@@ -732,7 +745,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           year,
           contribs.concessional,
           contribs.nonConcessional,
-          currentState,
+          currentCarryForwardState,
+          currentNonConcCapState,
           settings.super
         );
         
@@ -806,20 +820,9 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           });
         }
         
-        // Handle excess concessional contributions (added to assessable income)
-        if (result.excessConcessional > 0) {
-          taxEvents.push({
-            id: uuidv4(),
-            year,
-            type: 'incomeTax',
-            description: `Excess concessional contributions`,
-            sourceAccountId: superAccountId,
-            sourceAccountName: superAccount.name,
-            assessableAmount: result.excessConcessional,
-            fundedFromAccountId: defaultFundingAccountId,
-            fundedFromAccountName: defaultFundingAccount?.name ?? 'Not configured',
-          });
-        }
+        // Note: Excess concessional contributions are NOT added back to assessable income
+        // because we limit the deduction upfront to the available concessional cap.
+        // The excess is treated as non-concessional for cap purposes (already handled above).
       }
     }
 
@@ -976,22 +979,28 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     }
 
     // ===========================================
-    // Process super contributions and carry-forward
+    // Process super contributions and cap tracking
     // ===========================================
     const offBalanceSheet: OffBalanceSheetItem[] = [];
     
     if (persons.length > 0 && settings.super) {
-      // Aggregate contributions by person for this year
+      // Aggregate contributions by person for this year (cap-relevant only)
       const contributionsByPerson = aggregateContributionsByPerson(events, year, persons);
       
-      // Process each person's contributions
+      // Process each person's contributions and update cap states
       const newCarryForwardStates = new Map<string, CarryForwardState>();
+      const newNonConcessionalCapStates = new Map<string, NonConcessionalCapState>();
+      const yearContributionResults: ContributionProcessingResult[] = [];
       
       for (const person of persons) {
         const personContribs = contributionsByPerson.get(person.id);
-        const currentState = carryForwardStates.get(person.id) ?? { 
+        const currentCarryForwardState = carryForwardStates.get(person.id) ?? { 
           personId: person.id, 
           unusedCaps: [] 
+        };
+        const currentNonConcCapState = nonConcessionalCapStates.get(person.id) ?? {
+          personId: person.id,
+          closingBalance: 0,
         };
         
         const result = processPersonContributions(
@@ -999,24 +1008,27 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           year,
           personContribs?.concessional ?? 0,
           personContribs?.nonConcessional ?? 0,
-          currentState,
+          currentCarryForwardState,
+          currentNonConcCapState,
           settings.super
         );
         
         newCarryForwardStates.set(person.id, result.newCarryForwardState);
+        newNonConcessionalCapStates.set(person.id, result.newNonConcessionalCapState);
+        yearContributionResults.push(result);
       }
       
-      // Update carry-forward states for next year
+      // Update states for next year
       carryForwardStates = newCarryForwardStates;
+      nonConcessionalCapStates = newNonConcessionalCapStates;
       
-      // Create off-balance sheet items for carry-forward balances
-      const carryForwardItems = createCarryForwardOffBalanceSheetItems(
-        carryForwardStates,
+      // Create off-balance sheet items for cap accounts (opening/movement/closing)
+      const capAccountItems = createCapAccountOffBalanceSheetItems(
+        yearContributionResults,
         persons,
-        year,
         settings.super
       );
-      offBalanceSheet.push(...carryForwardItems);
+      offBalanceSheet.push(...capAccountItems);
     }
 
     years.push({

@@ -9,6 +9,7 @@ import type { Account } from './schemas/account';
 import type { Event } from './schemas/event';
 import type { Epoch } from './schemas/epoch';
 import type { Assumptions } from './schemas/assumption';
+import { defaultSourceConfigs, type SuperContributionSourceConfig } from './schemas/settings';
 
 function App() {
   const { accounts, create: createAccount, update: updateAccount, reorder: reorderAccounts } = useAccounts();
@@ -214,6 +215,7 @@ function App() {
         accounts={accounts as unknown as Account[]}
         persons={persons}
         forecast={forecast}
+        settings={settings}
         onSave={handleSaveEvent}
       />
       <Modal isOpen={showSettings} onClose={() => setShowSettings(false)} title="Settings" size="lg">
@@ -380,6 +382,76 @@ function App() {
               <p className="text-xs text-gray-500 mt-1">
                 Additional 15% tax applies when income + concessional contributions exceeds this threshold
               </p>
+            </div>
+
+            {/* Source Configuration */}
+            <div className="mt-6 pt-4 border-t border-purple-200">
+              <h4 className="text-sm font-medium text-purple-700 mb-3">Contribution Source Defaults</h4>
+              <p className="text-xs text-gray-500 mb-3">
+                Configure default behavior for each contribution source. These defaults are applied when adding new super contribution events.
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-600 border-b">
+                      <th className="py-2 pr-2">Source</th>
+                      <th className="py-2 px-2">Default Type</th>
+                      <th className="py-2 pl-2">Reduces Income</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {defaultSourceConfigs.map((defaultConfig) => {
+                      const currentConfigs = settings.super?.sourceConfigs ?? [];
+                      const currentConfig = currentConfigs.find((c) => c.source === defaultConfig.source) ?? defaultConfig;
+                      
+                      const updateSourceConfig = (updates: Partial<SuperContributionSourceConfig>) => {
+                        const newConfigs = [...currentConfigs];
+                        const existingIndex = newConfigs.findIndex((c) => c.source === defaultConfig.source);
+                        const updatedConfig = { ...currentConfig, ...updates };
+                        
+                        if (existingIndex >= 0) {
+                          newConfigs[existingIndex] = updatedConfig;
+                        } else {
+                          newConfigs.push(updatedConfig);
+                        }
+                        
+                        updateSettings({
+                          super: { ...settings.super, sourceConfigs: newConfigs }
+                        });
+                      };
+                      
+                      return (
+                        <tr key={defaultConfig.source} className="border-b border-gray-100">
+                          <td className="py-2 pr-2 text-gray-700">{currentConfig.label}</td>
+                          <td className="py-2 px-2">
+                            <select
+                              value={currentConfig.defaultContributionType}
+                              onChange={(e) => updateSourceConfig({ 
+                                defaultContributionType: e.target.value as 'concessional' | 'nonConcessional' | 'capExempt'
+                              })}
+                              className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-purple-500"
+                            >
+                              <option value="concessional">Concessional</option>
+                              <option value="nonConcessional">Non-Concessional</option>
+                              <option value="capExempt">Cap-Exempt</option>
+                            </select>
+                          </td>
+                          <td className="py-2 pl-2 text-center">
+                            <input
+                              type="checkbox"
+                              checked={currentConfig.defaultReducesAssessableIncome}
+                              onChange={(e) => updateSourceConfig({ 
+                                defaultReducesAssessableIncome: e.target.checked 
+                              })}
+                              className="h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>

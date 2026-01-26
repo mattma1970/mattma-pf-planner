@@ -5,7 +5,11 @@ export const EventTypeSchema = z.enum(['income', 'expense', 'assetChange', 'liab
 export type EventType = z.infer<typeof EventTypeSchema>;
 
 // Super contribution types
-export const SuperContributionTypeSchema = z.enum(['concessional', 'nonConcessional']);
+export const SuperContributionTypeSchema = z.enum([
+  'concessional',
+  'nonConcessional',
+  'capExempt',
+]);
 export type SuperContributionType = z.infer<typeof SuperContributionTypeSchema>;
 
 // Super contribution source (for tracking and tax purposes)
@@ -17,6 +21,7 @@ export const SuperContributionSourceSchema = z.enum([
   'personalAfterTax',     // Personal after-tax contributions (non-concessional)
   'spouseContribution',   // Contributions from spouse
   'governmentCoContribution', // Government co-contribution
+  'downsizer',            // Downsizer contribution (from home sale, cap-exempt)
 ]);
 export type SuperContributionSource = z.infer<typeof SuperContributionSourceSchema>;
 
@@ -26,6 +31,7 @@ export const SuperContributionConfigSchema = z.object({
   source: SuperContributionSourceSchema,
   memberPersonId: z.string(), // Person receiving the contribution
   reducesAssessableIncome: z.boolean().default(false), // For salary sacrifice / personal deductible
+  exemptFromCap: z.boolean().optional(), // Legacy field - now derived from contributionType === 'capExempt'
 });
 export type SuperContributionConfig = z.infer<typeof SuperContributionConfigSchema>;
 

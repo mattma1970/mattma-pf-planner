@@ -5,17 +5,28 @@ import type { Account } from '../../schemas/account';
 import type { Person } from '../../schemas/person';
 import type { ForecastResult } from '../../schemas/forecast';
 import type { EventTaxTreatmentType } from '../../schemas/tax';
+import type { Settings } from '../../schemas/settings';
+import { defaultSourceConfigs } from '../../schemas/settings';
 
 interface EventFormProps {
   event?: Event;
   accounts: Account[];
   persons?: Person[];
   forecast?: ForecastResult | null;
+  settings?: Settings;
   onSubmit: (data: Omit<Event, 'id'>) => void;
   onCancel: () => void;
 }
 
-export function EventForm({ event, accounts, persons, forecast, onSubmit, onCancel }: EventFormProps) {
+export function EventForm({ event, accounts, persons, forecast, settings, onSubmit, onCancel }: EventFormProps) {
+  const getSourceConfig = (source: SuperContributionSource) => {
+    const customConfigs = settings?.super?.sourceConfigs;
+    if (customConfigs) {
+      const custom = customConfigs.find((c) => c.source === source);
+      if (custom) return custom;
+    }
+    return defaultSourceConfigs.find((c) => c.source === source);
+  };
   const [year, setYear] = useState(event?.year?.toString() ?? new Date().getFullYear().toString());
   const [type, setType] = useState<EventType>(event?.type ?? 'income');
   const [description, setDescription] = useState(event?.description ?? '');
@@ -39,6 +50,18 @@ export function EventForm({ event, accounts, persons, forecast, onSubmit, onCanc
   const [reducesAssessableIncome, setReducesAssessableIncome] = useState(
     event?.superContribution?.reducesAssessableIncome ?? false
   );
+
+  const handleSourceChange = (newSource: SuperContributionSource) => {
+    setSuperSource(newSource);
+    // Auto-apply defaults from source config (only for new events, not editing)
+    if (!event) {
+      const config = getSourceConfig(newSource);
+      if (config) {
+        setSuperContributionType(config.defaultContributionType);
+        setReducesAssessableIncome(config.defaultReducesAssessableIncome);
+      }
+    }
+  };
   
   const assetAccounts = accounts.filter((a) => a.type === 'asset');
   const superAccounts = accounts.filter((a) => a.type === 'asset' && a.assetSubType === 'superannuation');
@@ -100,6 +123,7 @@ export function EventForm({ event, accounts, persons, forecast, onSubmit, onCanc
         source: superSource,
         memberPersonId,
         reducesAssessableIncome,
+        // exemptFromCap is derived from contributionType === 'capExempt' in the engine
       };
     } else {
       data.affectedAccountId = affectedAccountId || undefined;
@@ -207,30 +231,40 @@ export function EventForm({ event, accounts, persons, forecast, onSubmit, onCanc
           
           <div className="grid grid-cols-2 gap-4 mt-4">
             <Select
+              label="Contribution Name"
+              value={superSource}
+              onChange={(e) => handleSourceChange(e.target.value as SuperContributionSource)}
+            >
+              {defaultSourceConfigs.map((config) => (
+                <option key={config.source} value={config.source}>
+                  {getSourceConfig(config.source)?.label ?? config.label}
+                </option>
+              ))}
+            </Select>
+
+            <Select
               label="Contribution Type"
               value={superContributionType}
               onChange={(e) => setSuperContributionType(e.target.value as SuperContributionType)}
             >
               <option value="concessional">Concessional (pre-tax)</option>
               <option value="nonConcessional">Non-Concessional (after-tax)</option>
-            </Select>
-
-            <Select
-              label="Source"
-              value={superSource}
-              onChange={(e) => setSuperSource(e.target.value as SuperContributionSource)}
-            >
-              <option value="employerSG">Employer SG (mandatory)</option>
-              <option value="employerAdditional">Employer Additional</option>
-              <option value="salarySacrifice">Salary Sacrifice</option>
-              <option value="personalDeductible">Personal (tax deductible)</option>
-              <option value="personalAfterTax">Personal (after-tax)</option>
-              <option value="spouseContribution">Spouse Contribution</option>
-              <option value="governmentCoContribution">Government Co-contribution</option>
+              <option value="capExempt">Cap-Exempt</option>
             </Select>
           </div>
 
           <div className="grid grid-cols-2 gap-4 mt-4">
+            <Select
+              label="From Account (optional)"
+              value={sourceAccountId}
+              onChange={(e) => setSourceAccountId(e.target.value)}
+            >
+              <option value="">None (employer contribution)</option>
+              {assetAccounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </Select>
+
             <Select
               label="To Super Account"
               value={targetAccountId}
@@ -246,17 +280,6 @@ export function EventForm({ event, accounts, persons, forecast, onSubmit, onCanc
                   <option key={a.id} value={a.id}>{a.name}</option>
                 ))
               )}
-            </Select>
-
-            <Select
-              label="From Account (optional)"
-              value={sourceAccountId}
-              onChange={(e) => setSourceAccountId(e.target.value)}
-            >
-              <option value="">None (employer contribution)</option>
-              {assetAccounts.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
             </Select>
           </div>
 
@@ -279,10 +302,14 @@ export function EventForm({ event, accounts, persons, forecast, onSubmit, onCanc
 
           <div className="mt-4 bg-purple-50 border border-purple-200 rounded-lg p-3">
             <p className="text-sm text-purple-700">
-              {superContributionType === 'concessional' ? (
-                <>Concessional contributions are taxed at 15% within the fund. Cap: $30,000/year.</>
-              ) : (
-                <>Non-concessional contributions are not taxed (already after-tax). Cap: $120,000/year.</>
+              {superContributionType === 'concessional' && (
+                <>Concessional contributions are taxed at 15% within the fund. Cap: $30,000/year (+ unused carry-forward).</>
+              )}
+              {superContributionType === 'nonConcessional' && (
+                <>Non-concessional contributions are not taxed (already after-tax). Cap: $120,000/year (bring-forward available).</>
+              )}
+              {superContributionType === 'capExempt' && (
+                <>Cap-exempt contributions (e.g. downsizer, government co-contribution) are not subject to contribution caps.</>
               )}
             </p>
           </div>

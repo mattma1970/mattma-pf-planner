@@ -7,7 +7,9 @@ import {
   getContributionsForYear,
   createCarryForwardOffBalanceSheetItems,
   initializeCarryForwardStates,
+  calculateEffectiveIncomeReduction,
   type CarryForwardState,
+  type NonConcessionalCapState,
 } from './superContributions';
 import type { Event, Person } from '../schemas';
 import type { SuperSettings } from '../schemas/settings';
@@ -129,20 +131,45 @@ describe('consumeCarryForward', () => {
 });
 
 describe('processPersonContributions', () => {
-  const emptyState: CarryForwardState = { personId: 'p1', unusedCaps: [] };
+  const emptyCarryForwardState: CarryForwardState = { personId: 'p1', unusedCaps: [] };
+  const emptyNonConcState: NonConcessionalCapState = { personId: 'p1', closingBalance: 0 };
 
   it('calculates contributions tax at 15%', () => {
-    const result = processPersonContributions('p1', 2025, 20000, 0, emptyState, testSettings);
+    const result = processPersonContributions('p1', 2025, 20000, 0, emptyCarryForwardState, emptyNonConcState, testSettings);
     
     expect(result.contributionsTax).toBe(3000); // 20000 * 0.15
     expect(result.excessConcessional).toBe(0);
   });
 
   it('identifies excess when contributions exceed cap', () => {
-    const result = processPersonContributions('p1', 2025, 40000, 0, emptyState, testSettings);
+    const result = processPersonContributions('p1', 2025, 40000, 0, emptyCarryForwardState, emptyNonConcState, testSettings);
     
     expect(result.excessConcessional).toBe(10000); // 40000 - 30000 cap
     expect(result.contributionsTax).toBe(4500); // 30000 * 0.15
+  });
+
+  it('excess concessional flows to non-concessional cap', () => {
+    // Contribute $50k concessional (exceeds $30k cap by $20k)
+    // The $20k excess becomes effectively non-concessional
+    const result = processPersonContributions('p1', 2025, 50000, 0, emptyCarryForwardState, emptyNonConcState, testSettings);
+    
+    expect(result.excessConcessional).toBe(20000); // 50000 - 30000 cap
+    
+    // Non-concessional cap should be reduced by the $20k excess
+    expect(result.nonConcessionalCapOpening).toBe(120000);
+    expect(result.nonConcessionalCapMovement).toBe(-20000); // Excess concessional counts here
+    expect(result.nonConcessionalCapClosing).toBe(100000);
+  });
+
+  it('excess concessional combines with explicit non-concessional for cap', () => {
+    // $40k concessional (exceeds $30k cap by $10k) + $50k explicit non-concessional
+    // Total non-concessional for cap = $10k + $50k = $60k
+    const result = processPersonContributions('p1', 2025, 40000, 50000, emptyCarryForwardState, emptyNonConcState, testSettings);
+    
+    expect(result.excessConcessional).toBe(10000);
+    expect(result.nonConcessionalCapOpening).toBe(120000);
+    expect(result.nonConcessionalCapMovement).toBe(-60000); // $50k explicit + $10k excess
+    expect(result.nonConcessionalCapClosing).toBe(60000);
   });
 
   it('uses carry-forward to cover excess', () => {
@@ -151,7 +178,7 @@ describe('processPersonContributions', () => {
       unusedCaps: [{ year: 2024, amount: 15000 }],
     };
     
-    const result = processPersonContributions('p1', 2025, 40000, 0, stateWithCarryForward, testSettings);
+    const result = processPersonContributions('p1', 2025, 40000, 0, stateWithCarryForward, emptyNonConcState, testSettings);
     
     // Cap is 30000 + 15000 carry forward = 45000
     expect(result.totalAvailableCap).toBe(45000);
@@ -162,7 +189,7 @@ describe('processPersonContributions', () => {
   });
 
   it('adds unused cap to carry-forward', () => {
-    const result = processPersonContributions('p1', 2025, 10000, 0, emptyState, testSettings);
+    const result = processPersonContributions('p1', 2025, 10000, 0, emptyCarryForwardState, emptyNonConcState, testSettings);
     
     // Unused: 30000 - 10000 = 20000
     expect(result.newCarryForwardState.unusedCaps).toContainEqual({
@@ -172,7 +199,7 @@ describe('processPersonContributions', () => {
   });
 
   it('handles zero contributions', () => {
-    const result = processPersonContributions('p1', 2025, 0, 0, emptyState, testSettings);
+    const result = processPersonContributions('p1', 2025, 0, 0, emptyCarryForwardState, emptyNonConcState, testSettings);
     
     expect(result.contributionsTax).toBe(0);
     expect(result.excessConcessional).toBe(0);
@@ -183,7 +210,7 @@ describe('processPersonContributions', () => {
   });
 
   it('handles exactly at cap', () => {
-    const result = processPersonContributions('p1', 2025, 30000, 0, emptyState, testSettings);
+    const result = processPersonContributions('p1', 2025, 30000, 0, emptyCarryForwardState, emptyNonConcState, testSettings);
     
     expect(result.excessConcessional).toBe(0);
     expect(result.contributionsTax).toBe(4500);
@@ -191,7 +218,7 @@ describe('processPersonContributions', () => {
   });
 
   it('handles non-concessional contributions separately', () => {
-    const result = processPersonContributions('p1', 2025, 20000, 50000, emptyState, testSettings);
+    const result = processPersonContributions('p1', 2025, 20000, 50000, emptyCarryForwardState, emptyNonConcState, testSettings);
     
     expect(result.concessionalContributions).toBe(20000);
     expect(result.nonConcessionalContributions).toBe(50000);
@@ -205,7 +232,7 @@ describe('processPersonContributions', () => {
       contributionsTaxRate: 0.20, // 20% instead of 15%
     };
     
-    const result = processPersonContributions('p1', 2025, 20000, 0, emptyState, customSettings);
+    const result = processPersonContributions('p1', 2025, 20000, 0, emptyCarryForwardState, emptyNonConcState, customSettings);
     
     expect(result.contributionsTax).toBe(4000); // 20000 * 0.20
   });
@@ -216,7 +243,7 @@ describe('processPersonContributions', () => {
       concessionalCap: 50000, // Higher cap
     };
     
-    const result = processPersonContributions('p1', 2025, 40000, 0, emptyState, customSettings);
+    const result = processPersonContributions('p1', 2025, 40000, 0, emptyCarryForwardState, emptyNonConcState, customSettings);
     
     expect(result.excessConcessional).toBe(0); // No excess with 50k cap
     expect(result.concessionalCap).toBe(50000);
@@ -240,6 +267,7 @@ describe('getContributionsForYear', () => {
       source: 'employerSG',
       memberPersonId: personId,
       reducesAssessableIncome: type === 'concessional',
+      exemptFromCap: false,
     },
   });
 
@@ -290,6 +318,7 @@ describe('aggregateContributionsByPerson', () => {
           source: 'employerSG',
           memberPersonId: 'p1',
           reducesAssessableIncome: false,
+          exemptFromCap: false,
         },
       },
       {
@@ -303,6 +332,7 @@ describe('aggregateContributionsByPerson', () => {
           source: 'salarySacrifice',
           memberPersonId: 'p1',
           reducesAssessableIncome: true,
+          exemptFromCap: false,
         },
       },
       {
@@ -316,6 +346,7 @@ describe('aggregateContributionsByPerson', () => {
           source: 'personalAfterTax',
           memberPersonId: 'p1',
           reducesAssessableIncome: false,
+          exemptFromCap: false,
         },
       },
     ];
@@ -383,27 +414,33 @@ describe('initializeCarryForwardStates', () => {
 });
 
 describe('integration: multi-year carry-forward', () => {
+  const emptyNonConcState: NonConcessionalCapState = { personId: 'p1', closingBalance: 0 };
+  
   it('tracks carry-forward across multiple years correctly', () => {
     const personId = 'p1';
     
     // Year 1: Contribute nothing, build up carry-forward
     let state: CarryForwardState = { personId, unusedCaps: [] };
-    let result = processPersonContributions(personId, 2022, 0, 0, state, testSettings);
+    let nonConcState: NonConcessionalCapState = { personId, closingBalance: 0 };
+    let result = processPersonContributions(personId, 2022, 0, 0, state, nonConcState, testSettings);
     state = result.newCarryForwardState;
+    nonConcState = result.newNonConcessionalCapState;
     expect(state.unusedCaps).toContainEqual({ year: 2022, amount: 30000 });
     
     // Year 2: Contribute nothing again
-    result = processPersonContributions(personId, 2023, 0, 0, state, testSettings);
+    result = processPersonContributions(personId, 2023, 0, 0, state, nonConcState, testSettings);
     state = result.newCarryForwardState;
+    nonConcState = result.newNonConcessionalCapState;
     expect(state.unusedCaps).toHaveLength(2);
     
     // Year 3: Contribute nothing again
-    result = processPersonContributions(personId, 2024, 0, 0, state, testSettings);
+    result = processPersonContributions(personId, 2024, 0, 0, state, nonConcState, testSettings);
     state = result.newCarryForwardState;
+    nonConcState = result.newNonConcessionalCapState;
     expect(state.unusedCaps).toHaveLength(3);
     
     // Year 4: Use carry-forward with a large contribution
-    result = processPersonContributions(personId, 2025, 100000, 0, state, testSettings);
+    result = processPersonContributions(personId, 2025, 100000, 0, state, nonConcState, testSettings);
     
     // Total available: 30000 (2025) + 30000 (2022) + 30000 (2023) + 30000 (2024) = 120000
     expect(result.totalAvailableCap).toBe(120000);
@@ -429,11 +466,219 @@ describe('integration: multi-year carry-forward', () => {
     };
     
     // In 2025, with 5-year carry-forward, only 2021+ is valid
-    const result = processPersonContributions(personId, 2025, 60000, 0, state, testSettings);
+    const result = processPersonContributions(personId, 2025, 60000, 0, state, emptyNonConcState, testSettings);
     
     // Available: 30000 (2025) + 25000 (2021) + 25000 (2022) = 80000
     expect(result.availableCarryForward).toBe(50000);
     expect(result.totalAvailableCap).toBe(80000);
     expect(result.excessConcessional).toBe(0);
+  });
+});
+
+describe('non-concessional cap with bring-forward', () => {
+  const emptyCarryForwardState: CarryForwardState = { personId: 'p1', unusedCaps: [] };
+  
+  it('initializes with full annual cap when prior closing >= 0', () => {
+    const nonConcState: NonConcessionalCapState = { personId: 'p1', closingBalance: 0 };
+    const result = processPersonContributions('p1', 2025, 0, 50000, emptyCarryForwardState, nonConcState, testSettings);
+    
+    // Opening should be $120k (annual cap)
+    expect(result.nonConcessionalCapOpening).toBe(120000);
+    expect(result.nonConcessionalCapMovement).toBe(-50000);
+    expect(result.nonConcessionalCapClosing).toBe(70000);
+    expect(result.blockedNonConcessional).toBe(0);
+    expect(result.excessNonConcessional).toBe(0);
+  });
+
+  it('triggers bring-forward when contribution exceeds annual cap', () => {
+    const nonConcState: NonConcessionalCapState = { personId: 'p1', closingBalance: 0 };
+    const result = processPersonContributions('p1', 2025, 0, 360000, emptyCarryForwardState, nonConcState, testSettings);
+    
+    // Contribute full $360k using bring-forward
+    expect(result.nonConcessionalCapOpening).toBe(120000);
+    expect(result.nonConcessionalCapMovement).toBe(-360000);
+    expect(result.nonConcessionalCapClosing).toBe(-240000); // At the limit
+    expect(result.blockedNonConcessional).toBe(0);
+    expect(result.excessNonConcessional).toBe(0);
+  });
+
+  it('adds annual cap to prior closing when recovering from bring-forward', () => {
+    // Prior year closed at -$240k (used full bring-forward)
+    const nonConcState: NonConcessionalCapState = { personId: 'p1', closingBalance: -240000 };
+    const result = processPersonContributions('p1', 2026, 0, 0, emptyCarryForwardState, nonConcState, testSettings);
+    
+    // Opening: -$240k + $120k = -$120k
+    expect(result.nonConcessionalCapOpening).toBe(-120000);
+    // Since opening <= 0, contributions are blocked
+  });
+
+  it('blocks contributions when opening <= 0', () => {
+    // Prior year closed at -$120k (recovering from bring-forward)
+    const nonConcState: NonConcessionalCapState = { personId: 'p1', closingBalance: -120000 };
+    const result = processPersonContributions('p1', 2026, 0, 50000, emptyCarryForwardState, nonConcState, testSettings);
+    
+    // Opening: -$120k + $120k = $0
+    expect(result.nonConcessionalCapOpening).toBe(0);
+    // Opening <= 0, so contributions are blocked
+    expect(result.blockedNonConcessional).toBe(50000);
+    expect(result.nonConcessionalContributions).toBe(0); // No cap-relevant contributions processed
+    expect(result.nonConcessionalCapClosing).toBe(0);
+  });
+
+  it('flags excess when closing would go below -$240k', () => {
+    const nonConcState: NonConcessionalCapState = { personId: 'p1', closingBalance: 0 };
+    const result = processPersonContributions('p1', 2025, 0, 400000, emptyCarryForwardState, nonConcState, testSettings);
+    
+    // Trying to contribute $400k but max is $360k (3-year limit)
+    expect(result.nonConcessionalCapOpening).toBe(120000);
+    expect(result.excessNonConcessional).toBe(40000); // $400k - $360k
+    expect(result.nonConcessionalCapClosing).toBe(-240000); // Capped at minimum
+  });
+
+  it('resets cap after bring-forward is fully recovered', () => {
+    // Simulate multi-year recovery
+    const personId = 'p1';
+    
+    // Year 1: Use full $360k bring-forward
+    let nonConcState: NonConcessionalCapState = { personId, closingBalance: 0 };
+    let result = processPersonContributions(personId, 2025, 0, 360000, emptyCarryForwardState, nonConcState, testSettings);
+    expect(result.nonConcessionalCapClosing).toBe(-240000);
+    nonConcState = result.newNonConcessionalCapState;
+    
+    // Year 2: Opening = -$120k, blocked
+    result = processPersonContributions(personId, 2026, 0, 0, emptyCarryForwardState, nonConcState, testSettings);
+    expect(result.nonConcessionalCapOpening).toBe(-120000);
+    expect(result.nonConcessionalCapClosing).toBe(-120000);
+    nonConcState = result.newNonConcessionalCapState;
+    
+    // Year 3: Opening = $0, still blocked
+    result = processPersonContributions(personId, 2027, 0, 0, emptyCarryForwardState, nonConcState, testSettings);
+    expect(result.nonConcessionalCapOpening).toBe(0);
+    expect(result.nonConcessionalCapClosing).toBe(0);
+    nonConcState = result.newNonConcessionalCapState;
+    
+    // Year 4: Reset! Opening = $120k
+    result = processPersonContributions(personId, 2028, 0, 50000, emptyCarryForwardState, nonConcState, testSettings);
+    expect(result.nonConcessionalCapOpening).toBe(120000);
+    expect(result.blockedNonConcessional).toBe(0);
+    expect(result.nonConcessionalCapClosing).toBe(70000);
+  });
+
+  it('tracks non-concessional cap in off-balance sheet items', () => {
+    const nonConcState: NonConcessionalCapState = { personId: 'p1', closingBalance: 0 };
+    const result = processPersonContributions('p1', 2025, 0, 100000, emptyCarryForwardState, nonConcState, testSettings);
+    
+    expect(result.nonConcessionalCapOpening).toBe(120000);
+    expect(result.nonConcessionalCapMovement).toBe(-100000);
+    expect(result.nonConcessionalCapClosing).toBe(20000);
+    expect(result.newNonConcessionalCapState.closingBalance).toBe(20000);
+  });
+});
+
+describe('exemptFromCap contributions', () => {
+  const persons: Person[] = [{ id: 'p1', name: 'Alice', birthYear: 1980 }];
+  
+  it('excludes exempt contributions from cap tracking', () => {
+    const events: Event[] = [
+      {
+        id: 'e1',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Downsizer contribution',
+        amount: 300000,
+        superContribution: {
+          contributionType: 'nonConcessional',
+          source: 'downsizer',
+          memberPersonId: 'p1',
+          reducesAssessableIncome: false,
+          exemptFromCap: true,
+        },
+      },
+      {
+        id: 'e2',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Personal after-tax',
+        amount: 50000,
+        superContribution: {
+          contributionType: 'nonConcessional',
+          source: 'personalAfterTax',
+          memberPersonId: 'p1',
+          reducesAssessableIncome: false,
+          exemptFromCap: false,
+        },
+      },
+    ];
+    
+    const result = aggregateContributionsByPerson(events, 2025, persons);
+    
+    // Only the $50k non-exempt should be counted
+    expect(result.get('p1')?.nonConcessional).toBe(50000);
+  });
+
+  it('includes exempt contributions in income reduction tracking', () => {
+    const events: Event[] = [
+      {
+        id: 'e1',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Personal deductible',
+        amount: 20000,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'personalDeductible',
+          memberPersonId: 'p1',
+          reducesAssessableIncome: true,
+          exemptFromCap: true, // Hypothetical exempt concessional
+        },
+      },
+    ];
+    
+    const result = aggregateContributionsByPerson(events, 2025, persons);
+    
+    // Income reduction is tracked even for exempt
+    expect(result.get('p1')?.incomeReduction).toBe(20000);
+    // But cap tracking excludes it
+    expect(result.get('p1')?.concessional).toBe(0);
+  });
+});
+
+describe('calculateEffectiveIncomeReduction', () => {
+  it('allows full deduction when within cap', () => {
+    const result = calculateEffectiveIncomeReduction(20000, 20000, 30000);
+    
+    expect(result.effectiveReduction).toBe(20000);
+    expect(result.excessNotDeductible).toBe(0);
+  });
+
+  it('limits deduction to available cap when claimed exceeds cap', () => {
+    // Claimed $50k deduction, made $50k concessional, but only $30k cap available
+    const result = calculateEffectiveIncomeReduction(50000, 50000, 30000);
+    
+    expect(result.effectiveReduction).toBe(30000);
+    expect(result.excessNotDeductible).toBe(20000);
+  });
+
+  it('limits deduction to concessional contribution when claimed exceeds contribution', () => {
+    // Claimed $30k deduction but only contributed $20k concessional
+    const result = calculateEffectiveIncomeReduction(30000, 20000, 30000);
+    
+    expect(result.effectiveReduction).toBe(20000);
+    expect(result.excessNotDeductible).toBe(10000);
+  });
+
+  it('handles zero claimed reduction', () => {
+    const result = calculateEffectiveIncomeReduction(0, 50000, 30000);
+    
+    expect(result.effectiveReduction).toBe(0);
+    expect(result.excessNotDeductible).toBe(0);
+  });
+
+  it('handles case where cap is limiting factor with carry-forward', () => {
+    // Cap of $60k (includes carry-forward), contributed $80k, claimed $80k deduction
+    const result = calculateEffectiveIncomeReduction(80000, 80000, 60000);
+    
+    expect(result.effectiveReduction).toBe(60000);
+    expect(result.excessNotDeductible).toBe(20000);
   });
 });

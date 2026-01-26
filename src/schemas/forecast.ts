@@ -8,10 +8,18 @@ export type ResolvedAssumptions = z.infer<typeof ResolvedAssumptionsSchema>;
 
 export const OffBalanceSheetItemSchema = z.object({
   id: z.string(),
-  type: z.enum(['carryForwardContribution', 'frankingCredits']),
+  type: z.enum([
+    'carryForwardContribution',
+    'frankingCredits',
+    'concessionalCapAccount',
+    'nonConcessionalCapAccount',
+  ]),
   label: z.string(),
   personId: z.string().optional(),
-  value: z.number(),
+  value: z.number().optional(),
+  opening: z.number().optional(),
+  movement: z.number().optional(),
+  closing: z.number().optional(),
 });
 export type OffBalanceSheetItem = z.infer<typeof OffBalanceSheetItemSchema>;
 
