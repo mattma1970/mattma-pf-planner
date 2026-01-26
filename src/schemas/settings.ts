@@ -7,6 +7,7 @@ export const SettingsSchema = z.object({
   eventHighlightColor: z.string().default('#bfdbfe'),
   defaultTaxFundingAccountId: z.string().uuid().optional(),
   growthCalculationMethod: GrowthCalculationMethodSchema.default('openingBalance'),
+  superPreservationAge: z.number().int().default(67),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
@@ -14,4 +15,5 @@ export const defaultSettings: Settings = {
   eventHighlightColor: '#bfdbfe',
   defaultTaxFundingAccountId: undefined,
   growthCalculationMethod: 'openingBalance',
+  superPreservationAge: 67,
 };

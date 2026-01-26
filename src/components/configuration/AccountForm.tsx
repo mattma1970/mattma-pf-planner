@@ -1,17 +1,17 @@
 import { useState } from 'react';
 import { Button, Input, Select } from '../ui';
 import type { Account, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType, AssetSubType, SuperPhase } from '../../schemas/account';
-import type { Person } from '../../schemas/person';
+import type { Settings } from '../../schemas/settings';
 
 interface AccountFormProps {
   account?: Account;
   accounts: Account[];
-  persons?: Person[];
+  settings?: Settings;
   onSubmit: (data: Omit<Account, 'id'>) => void;
   onCancel: () => void;
 }
 
-export function AccountForm({ account, accounts, persons = [], onSubmit, onCancel }: AccountFormProps) {
+export function AccountForm({ account, accounts, settings, onSubmit, onCancel }: AccountFormProps) {
   const [name, setName] = useState(account?.name ?? '');
   const [type, setType] = useState(account?.type ?? 'income');
   const [initialValue, setInitialValue] = useState(account?.initialValue?.toString() ?? '0');
@@ -107,8 +107,7 @@ export function AccountForm({ account, accounts, persons = [], onSubmit, onCance
   // Superannuation-specific settings
   const [assetSubType, setAssetSubType] = useState<AssetSubType>(account?.assetSubType ?? 'generic');
   const [superPhase, setSuperPhase] = useState<SuperPhase>(account?.superConfig?.phase ?? 'accumulation');
-  const [superMemberPersonId, setSuperMemberPersonId] = useState(account?.superConfig?.memberPersonId ?? '');
-  const [preservationAgeOverride, setPreservationAgeOverride] = useState(account?.superConfig?.preservationAgeOverride?.toString() ?? '');
+  const [preservationYear, setPreservationYear] = useState(account?.superConfig?.preservationYear?.toString() ?? '');
 
   const otherAccounts = accounts.filter((a) => a.id !== account?.id);
   const assetAccounts = accounts.filter((a) => a.type === 'asset' && a.id !== account?.id);
@@ -202,10 +201,9 @@ export function AccountForm({ account, accounts, persons = [], onSubmit, onCance
       
       // Superannuation settings (for assets)
       assetSubType: type === 'asset' ? assetSubType : undefined,
-      superConfig: type === 'asset' && assetSubType === 'superannuation' && superMemberPersonId ? {
+      superConfig: type === 'asset' && assetSubType === 'superannuation' ? {
         phase: superPhase,
-        memberPersonId: superMemberPersonId,
-        preservationAgeOverride: preservationAgeOverride ? parseInt(preservationAgeOverride) : undefined,
+        preservationYear: preservationYear ? parseInt(preservationYear) : undefined,
       } : undefined,
     });
   };
@@ -245,34 +243,27 @@ export function AccountForm({ account, accounts, persons = [], onSubmit, onCance
         <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
           <h4 className="text-sm font-medium text-purple-800 mb-3">Superannuation Settings</h4>
           
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <Select
-              label="Member"
-              value={superMemberPersonId}
-              onChange={(e) => setSuperMemberPersonId(e.target.value)}
-            >
-              <option value="">Select person...</option>
-              {persons.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </Select>
-            <Select
-              label="Phase"
-              value={superPhase}
-              onChange={(e) => setSuperPhase(e.target.value as SuperPhase)}
-            >
-              <option value="accumulation">Accumulation</option>
-              <option value="pension">Pension</option>
-            </Select>
-          </div>
+          <Select
+            label="Phase"
+            value={superPhase}
+            onChange={(e) => setSuperPhase(e.target.value as SuperPhase)}
+          >
+            <option value="accumulation">Accumulation</option>
+            <option value="pension">Pension</option>
+          </Select>
           
-          <Input
-            label="Preservation Age Override"
-            type="number"
-            value={preservationAgeOverride}
-            onChange={(e) => setPreservationAgeOverride(e.target.value)}
-            placeholder="Leave blank for default (60)"
-          />
+          <div className="mt-4">
+            <Input
+              label="Year of Preservation Age"
+              type="number"
+              value={preservationYear}
+              onChange={(e) => setPreservationYear(e.target.value)}
+              placeholder="e.g. 2045"
+            />
+            <p className="text-xs text-purple-600 mt-1">
+              The year you turn {settings?.superPreservationAge ?? 67}. This age is configurable in Settings.
+            </p>
+          </div>
           
           <div className="mt-3 text-xs text-purple-600 space-y-1">
             <p><strong>Accumulation:</strong> 15% tax on earnings, cannot withdraw until preservation age</p>

@@ -11,9 +11,8 @@ export const SuperPhaseSchema = z.enum(['accumulation', 'pension']);
 export type SuperPhase = z.infer<typeof SuperPhaseSchema>;
 
 export const SuperAccountConfigSchema = z.object({
-  memberPersonId: z.string(),
   phase: SuperPhaseSchema,
-  preservationAgeOverride: z.number().int().optional(),
+  preservationYear: z.number().int().optional(), // Year when preservation age is reached
 });
 export type SuperAccountConfig = z.infer<typeof SuperAccountConfigSchema>;
 
