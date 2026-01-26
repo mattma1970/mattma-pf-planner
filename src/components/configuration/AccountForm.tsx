@@ -261,7 +261,7 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
               placeholder="e.g. 2045"
             />
             <p className="text-xs text-purple-600 mt-1">
-              The year you turn {settings?.superPreservationAge ?? 67}. This age is configurable in Settings.
+              The year you turn {settings?.super?.preservationAge ?? 67}. This age is configurable in Settings.
             </p>
           </div>
           

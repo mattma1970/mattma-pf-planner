@@ -1,42 +1,6 @@
 import type { Event, Person, OffBalanceSheetItem } from '../schemas';
-
-// Contribution caps by financial year
-// These are configurable and can be extended for future years
-export interface ContributionCaps {
-  concessional: number;
-  nonConcessional: number;
-  carryForwardYears: number; // Number of years unused cap can be carried forward
-}
-
-export const contributionCapsByYear: Record<number, ContributionCaps> = {
-  2024: { concessional: 27500, nonConcessional: 110000, carryForwardYears: 5 },
-  2025: { concessional: 30000, nonConcessional: 120000, carryForwardYears: 5 },
-  2026: { concessional: 30000, nonConcessional: 120000, carryForwardYears: 5 },
-};
-
-// Get caps for a year, falling back to most recent known year
-export function getCapsForYear(year: number): ContributionCaps {
-  if (contributionCapsByYear[year]) {
-    return contributionCapsByYear[year];
-  }
-  
-  const knownYears = Object.keys(contributionCapsByYear).map(Number).sort((a, b) => b - a);
-  for (const knownYear of knownYears) {
-    if (knownYear <= year) {
-      return contributionCapsByYear[knownYear];
-    }
-  }
-  
-  return contributionCapsByYear[knownYears[knownYears.length - 1]];
-}
-
-// Track contributions per person per year
-export interface PersonYearContributions {
-  personId: string;
-  year: number;
-  concessional: number;
-  nonConcessional: number;
-}
+import type { SuperSettings } from '../schemas/settings';
+import { defaultSuperSettings } from '../schemas/settings';
 
 // Carry-forward tracking per person
 export interface CarryForwardState {
@@ -72,9 +36,6 @@ export interface ContributionProcessingResult {
   // Updated carry-forward state
   newCarryForwardState: CarryForwardState;
 }
-
-// Constants
-const CONCESSIONAL_TAX_RATE = 0.15;
 
 /**
  * Extract super contribution events for a specific year
@@ -194,36 +155,37 @@ export function processPersonContributions(
   year: number,
   concessionalContributions: number,
   nonConcessionalContributions: number,
-  carryForwardState: CarryForwardState
+  carryForwardState: CarryForwardState,
+  superSettings: SuperSettings = defaultSuperSettings
 ): ContributionProcessingResult {
-  const caps = getCapsForYear(year);
+  const { concessionalCap, carryForwardYears, contributionsTaxRate } = superSettings;
   
   // Calculate available carry-forward (only for concessional)
   const availableCarryForward = calculateAvailableCarryForward(
     carryForwardState,
     year,
-    caps.carryForwardYears
+    carryForwardYears
   );
   
-  const totalAvailableCap = caps.concessional + availableCarryForward;
+  const totalAvailableCap = concessionalCap + availableCarryForward;
   
   // Calculate excess
   const excessConcessional = Math.max(0, concessionalContributions - totalAvailableCap);
   const contributionsWithinCap = Math.min(concessionalContributions, totalAvailableCap);
   
   // Calculate how much carry-forward is needed
-  const neededFromCarryForward = Math.max(0, contributionsWithinCap - caps.concessional);
+  const neededFromCarryForward = Math.max(0, contributionsWithinCap - concessionalCap);
   
   // Use carry-forward (FIFO)
   const carryForwardResult = consumeCarryForward(
     carryForwardState,
     neededFromCarryForward,
     year,
-    caps.carryForwardYears
+    carryForwardYears
   );
   
   // Calculate unused current year cap to add to carry-forward
-  const unusedCurrentYearCap = Math.max(0, caps.concessional - concessionalContributions);
+  const unusedCurrentYearCap = Math.max(0, concessionalCap - concessionalContributions);
   
   // Build new carry-forward state
   const newCarryForwardState: CarryForwardState = {
@@ -235,8 +197,8 @@ export function processPersonContributions(
   };
   
   // Calculate taxes
-  // 15% contributions tax on concessional within cap
-  const contributionsTax = contributionsWithinCap * CONCESSIONAL_TAX_RATE;
+  // Contributions tax on concessional within cap
+  const contributionsTax = contributionsWithinCap * contributionsTaxRate;
   
   // Excess concessional is included in assessable income and taxed at marginal rates
   // For now, we just flag the excess - the main tax engine will handle marginal rate
@@ -244,7 +206,7 @@ export function processPersonContributions(
   
   // Calculate remaining carry-forward
   const remainingCarryForward = newCarryForwardState.unusedCaps
-    .filter(cap => cap.year > year - caps.carryForwardYears)
+    .filter(cap => cap.year > year - carryForwardYears)
     .reduce((sum, cap) => sum + cap.amount, 0);
   
   return {
@@ -252,7 +214,7 @@ export function processPersonContributions(
     year,
     concessionalContributions,
     nonConcessionalContributions,
-    concessionalCap: caps.concessional,
+    concessionalCap,
     availableCarryForward,
     totalAvailableCap,
     excessConcessional,
@@ -270,16 +232,17 @@ export function processPersonContributions(
 export function createCarryForwardOffBalanceSheetItems(
   carryForwardStates: Map<string, CarryForwardState>,
   persons: Person[],
-  year: number
+  year: number,
+  superSettings: SuperSettings = defaultSuperSettings
 ): OffBalanceSheetItem[] {
-  const caps = getCapsForYear(year);
+  const { carryForwardYears } = superSettings;
   const items: OffBalanceSheetItem[] = [];
   
   for (const person of persons) {
     const state = carryForwardStates.get(person.id);
     if (!state) continue;
     
-    const availableCarryForward = calculateAvailableCarryForward(state, year, caps.carryForwardYears);
+    const availableCarryForward = calculateAvailableCarryForward(state, year, carryForwardYears);
     
     if (availableCarryForward > 0) {
       items.push({

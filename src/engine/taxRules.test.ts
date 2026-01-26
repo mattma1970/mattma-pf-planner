@@ -5,7 +5,10 @@ import {
   applyRule,
   calculateAdditionalTaxes,
   calculateDiv293,
+  getRulesFromSettings,
 } from './taxRules';
+import type { SuperSettings } from '../schemas/settings';
+import { defaultSuperSettings } from '../schemas/settings';
 
 const createContext = (overrides: Partial<RuleContext> = {}): RuleContext => ({
   taxableIncome: 0,
@@ -87,23 +90,48 @@ describe('applyRule', () => {
   });
 });
 
+describe('getRulesFromSettings', () => {
+  it('creates div293 rule from settings', () => {
+    const rules = getRulesFromSettings(defaultSuperSettings);
+    expect(rules).toHaveLength(1);
+    expect(rules[0].type).toBe('div293');
+    expect(rules[0].threshold).toBe(250000);
+    expect(rules[0].rate).toBe(0.15);
+  });
+
+  it('uses custom settings', () => {
+    const customSettings: SuperSettings = {
+      ...defaultSuperSettings,
+      div293Threshold: 300000,
+      div293Rate: 0.20,
+    };
+    const rules = getRulesFromSettings(customSettings);
+    expect(rules[0].threshold).toBe(300000);
+    expect(rules[0].rate).toBe(0.20);
+  });
+});
+
 describe('calculateAdditionalTaxes', () => {
-  it('applies rules for specified year', () => {
+  it('applies rules from settings', () => {
     const ctx = createContext({
       taxableIncome: 260000,
       concessionalContributions: 27500,
     });
-    const result = calculateAdditionalTaxes(ctx, 2024);
+    const result = calculateAdditionalTaxes(ctx, defaultSuperSettings);
     expect(result).toBe(27500 * 0.15);
   });
 
-  it('falls back to most recent year if year not found', () => {
+  it('uses custom settings thresholds', () => {
     const ctx = createContext({
       taxableIncome: 260000,
       concessionalContributions: 27500,
     });
-    const result = calculateAdditionalTaxes(ctx, 2026);
-    expect(result).toBe(27500 * 0.15);
+    const customSettings: SuperSettings = {
+      ...defaultSuperSettings,
+      div293Threshold: 300000, // Higher threshold
+    };
+    const result = calculateAdditionalTaxes(ctx, customSettings);
+    expect(result).toBe(0); // Below threshold now
   });
 
   it('returns 0 when no taxes apply', () => {
@@ -111,13 +139,13 @@ describe('calculateAdditionalTaxes', () => {
       taxableIncome: 100000,
       concessionalContributions: 10000,
     });
-    expect(calculateAdditionalTaxes(ctx, 2024)).toBe(0);
+    expect(calculateAdditionalTaxes(ctx, defaultSuperSettings)).toBe(0);
   });
 });
 
 describe('calculateDiv293', () => {
   it('returns applies=false when income below threshold', () => {
-    const result = calculateDiv293(200000, 27500, 2024);
+    const result = calculateDiv293(200000, 27500, defaultSuperSettings);
     expect(result.applies).toBe(false);
     expect(result.taxAmount).toBe(0);
     expect(result.adjustedIncome).toBe(227500);
@@ -126,7 +154,7 @@ describe('calculateDiv293', () => {
   });
 
   it('taxes partial contributions when income + contributions partially above threshold', () => {
-    const result = calculateDiv293(240000, 27500, 2024);
+    const result = calculateDiv293(240000, 27500, defaultSuperSettings);
     const excess = 240000 + 27500 - 250000; // 17500
     expect(result.applies).toBe(true);
     expect(result.taxAmount).toBe(excess * 0.15);
@@ -134,37 +162,42 @@ describe('calculateDiv293', () => {
   });
 
   it('taxes full contributions when income + contributions way above threshold', () => {
-    const result = calculateDiv293(300000, 27500, 2024);
+    const result = calculateDiv293(300000, 27500, defaultSuperSettings);
     expect(result.applies).toBe(true);
     expect(result.taxAmount).toBe(27500 * 0.15);
     expect(result.adjustedIncome).toBe(327500);
   });
 
   it('returns applies=false at exact threshold', () => {
-    const result = calculateDiv293(222500, 27500, 2024);
+    const result = calculateDiv293(222500, 27500, defaultSuperSettings);
     expect(result.applies).toBe(false);
     expect(result.taxAmount).toBe(0);
     expect(result.adjustedIncome).toBe(250000);
   });
 
   it('taxes $1 over threshold correctly', () => {
-    const result = calculateDiv293(222501, 27500, 2024);
+    const result = calculateDiv293(222501, 27500, defaultSuperSettings);
     expect(result.applies).toBe(true);
     expect(result.taxAmount).toBe(1 * 0.15);
     expect(result.adjustedIncome).toBe(250001);
   });
 
   it('returns applies=false when contributions are zero', () => {
-    const result = calculateDiv293(300000, 0, 2024);
+    const result = calculateDiv293(300000, 0, defaultSuperSettings);
     expect(result.applies).toBe(false);
     expect(result.taxAmount).toBe(0);
     expect(result.concessionalContributions).toBe(0);
   });
 
-  it('falls back to most recent year rules for future years', () => {
-    const result = calculateDiv293(300000, 27500, 2030);
+  it('uses custom settings', () => {
+    const customSettings: SuperSettings = {
+      ...defaultSuperSettings,
+      div293Threshold: 200000,
+      div293Rate: 0.20,
+    };
+    const result = calculateDiv293(200000, 27500, customSettings);
     expect(result.applies).toBe(true);
-    expect(result.taxAmount).toBe(27500 * 0.15);
-    expect(result.threshold).toBe(250000);
+    expect(result.taxAmount).toBe(27500 * 0.20);
+    expect(result.threshold).toBe(200000);
   });
 });

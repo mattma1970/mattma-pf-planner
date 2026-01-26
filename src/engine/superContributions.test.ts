@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  getCapsForYear,
   calculateAvailableCarryForward,
   consumeCarryForward,
   processPersonContributions,
@@ -11,25 +10,18 @@ import {
   type CarryForwardState,
 } from './superContributions';
 import type { Event, Person } from '../schemas';
+import type { SuperSettings } from '../schemas/settings';
 
-describe('getCapsForYear', () => {
-  it('returns exact year caps when available', () => {
-    const caps = getCapsForYear(2025);
-    expect(caps.concessional).toBe(30000);
-    expect(caps.nonConcessional).toBe(120000);
-  });
-
-  it('falls back to most recent known year for future years', () => {
-    const caps = getCapsForYear(2030);
-    expect(caps.concessional).toBe(30000);
-  });
-
-  it('returns 2024 caps for 2024', () => {
-    const caps = getCapsForYear(2024);
-    expect(caps.concessional).toBe(27500);
-    expect(caps.nonConcessional).toBe(110000);
-  });
-});
+// Test super settings
+const testSettings: SuperSettings = {
+  preservationAge: 67,
+  concessionalCap: 30000,
+  nonConcessionalCap: 120000,
+  carryForwardYears: 5,
+  contributionsTaxRate: 0.15,
+  div293Threshold: 250000,
+  div293Rate: 0.15,
+};
 
 describe('calculateAvailableCarryForward', () => {
   it('returns 0 for empty carry-forward state', () => {
@@ -140,14 +132,14 @@ describe('processPersonContributions', () => {
   const emptyState: CarryForwardState = { personId: 'p1', unusedCaps: [] };
 
   it('calculates contributions tax at 15%', () => {
-    const result = processPersonContributions('p1', 2025, 20000, 0, emptyState);
+    const result = processPersonContributions('p1', 2025, 20000, 0, emptyState, testSettings);
     
     expect(result.contributionsTax).toBe(3000); // 20000 * 0.15
     expect(result.excessConcessional).toBe(0);
   });
 
   it('identifies excess when contributions exceed cap', () => {
-    const result = processPersonContributions('p1', 2025, 40000, 0, emptyState);
+    const result = processPersonContributions('p1', 2025, 40000, 0, emptyState, testSettings);
     
     expect(result.excessConcessional).toBe(10000); // 40000 - 30000 cap
     expect(result.contributionsTax).toBe(4500); // 30000 * 0.15
@@ -159,7 +151,7 @@ describe('processPersonContributions', () => {
       unusedCaps: [{ year: 2024, amount: 15000 }],
     };
     
-    const result = processPersonContributions('p1', 2025, 40000, 0, stateWithCarryForward);
+    const result = processPersonContributions('p1', 2025, 40000, 0, stateWithCarryForward, testSettings);
     
     // Cap is 30000 + 15000 carry forward = 45000
     expect(result.totalAvailableCap).toBe(45000);
@@ -170,7 +162,7 @@ describe('processPersonContributions', () => {
   });
 
   it('adds unused cap to carry-forward', () => {
-    const result = processPersonContributions('p1', 2025, 10000, 0, emptyState);
+    const result = processPersonContributions('p1', 2025, 10000, 0, emptyState, testSettings);
     
     // Unused: 30000 - 10000 = 20000
     expect(result.newCarryForwardState.unusedCaps).toContainEqual({
@@ -180,7 +172,7 @@ describe('processPersonContributions', () => {
   });
 
   it('handles zero contributions', () => {
-    const result = processPersonContributions('p1', 2025, 0, 0, emptyState);
+    const result = processPersonContributions('p1', 2025, 0, 0, emptyState, testSettings);
     
     expect(result.contributionsTax).toBe(0);
     expect(result.excessConcessional).toBe(0);
@@ -191,7 +183,7 @@ describe('processPersonContributions', () => {
   });
 
   it('handles exactly at cap', () => {
-    const result = processPersonContributions('p1', 2025, 30000, 0, emptyState);
+    const result = processPersonContributions('p1', 2025, 30000, 0, emptyState, testSettings);
     
     expect(result.excessConcessional).toBe(0);
     expect(result.contributionsTax).toBe(4500);
@@ -199,12 +191,35 @@ describe('processPersonContributions', () => {
   });
 
   it('handles non-concessional contributions separately', () => {
-    const result = processPersonContributions('p1', 2025, 20000, 50000, emptyState);
+    const result = processPersonContributions('p1', 2025, 20000, 50000, emptyState, testSettings);
     
     expect(result.concessionalContributions).toBe(20000);
     expect(result.nonConcessionalContributions).toBe(50000);
     // Non-concessional doesn't affect concessional tax
     expect(result.contributionsTax).toBe(3000);
+  });
+
+  it('uses custom tax rate from settings', () => {
+    const customSettings: SuperSettings = {
+      ...testSettings,
+      contributionsTaxRate: 0.20, // 20% instead of 15%
+    };
+    
+    const result = processPersonContributions('p1', 2025, 20000, 0, emptyState, customSettings);
+    
+    expect(result.contributionsTax).toBe(4000); // 20000 * 0.20
+  });
+
+  it('uses custom cap from settings', () => {
+    const customSettings: SuperSettings = {
+      ...testSettings,
+      concessionalCap: 50000, // Higher cap
+    };
+    
+    const result = processPersonContributions('p1', 2025, 40000, 0, emptyState, customSettings);
+    
+    expect(result.excessConcessional).toBe(0); // No excess with 50k cap
+    expect(result.concessionalCap).toBe(50000);
   });
 });
 
@@ -332,7 +347,7 @@ describe('createCarryForwardOffBalanceSheetItems', () => {
       ['p2', { personId: 'p2', unusedCaps: [] }],
     ]);
 
-    const items = createCarryForwardOffBalanceSheetItems(states, persons, 2025);
+    const items = createCarryForwardOffBalanceSheetItems(states, persons, 2025, testSettings);
 
     expect(items).toHaveLength(1);
     expect(items[0].personId).toBe('p1');
@@ -346,7 +361,7 @@ describe('createCarryForwardOffBalanceSheetItems', () => {
       ['p1', { personId: 'p1', unusedCaps: [{ year: 2019, amount: 50000 }] }],
     ]);
 
-    const items = createCarryForwardOffBalanceSheetItems(states, persons, 2025);
+    const items = createCarryForwardOffBalanceSheetItems(states, persons, 2025, testSettings);
 
     expect(items).toHaveLength(0);
   });
@@ -373,33 +388,33 @@ describe('integration: multi-year carry-forward', () => {
     
     // Year 1: Contribute nothing, build up carry-forward
     let state: CarryForwardState = { personId, unusedCaps: [] };
-    let result = processPersonContributions(personId, 2022, 0, 0, state);
+    let result = processPersonContributions(personId, 2022, 0, 0, state, testSettings);
     state = result.newCarryForwardState;
-    expect(state.unusedCaps).toContainEqual({ year: 2022, amount: 27500 });
+    expect(state.unusedCaps).toContainEqual({ year: 2022, amount: 30000 });
     
     // Year 2: Contribute nothing again
-    result = processPersonContributions(personId, 2023, 0, 0, state);
+    result = processPersonContributions(personId, 2023, 0, 0, state, testSettings);
     state = result.newCarryForwardState;
     expect(state.unusedCaps).toHaveLength(2);
     
     // Year 3: Contribute nothing again
-    result = processPersonContributions(personId, 2024, 0, 0, state);
+    result = processPersonContributions(personId, 2024, 0, 0, state, testSettings);
     state = result.newCarryForwardState;
     expect(state.unusedCaps).toHaveLength(3);
     
     // Year 4: Use carry-forward with a large contribution
-    result = processPersonContributions(personId, 2025, 100000, 0, state);
+    result = processPersonContributions(personId, 2025, 100000, 0, state, testSettings);
     
-    // Total available: 30000 (2025) + 27500 (2022) + 27500 (2023) + 27500 (2024) = 112500
-    expect(result.totalAvailableCap).toBe(112500);
+    // Total available: 30000 (2025) + 30000 (2022) + 30000 (2023) + 30000 (2024) = 120000
+    expect(result.totalAvailableCap).toBe(120000);
     expect(result.excessConcessional).toBe(0);
     expect(result.contributionsTax).toBe(15000); // 100000 * 0.15
     
-    // Remaining: 112500 - 100000 = 12500
-    expect(result.remainingCarryForward).toBe(12500);
+    // Remaining: 120000 - 100000 = 20000
+    expect(result.remainingCarryForward).toBe(20000);
   });
 
-  it('expires old carry-forward after 5 years', () => {
+  it('expires old carry-forward after configured years', () => {
     const personId = 'p1';
     
     // Start with old carry-forward from 2019
@@ -414,7 +429,7 @@ describe('integration: multi-year carry-forward', () => {
     };
     
     // In 2025, with 5-year carry-forward, only 2021+ is valid
-    const result = processPersonContributions(personId, 2025, 60000, 0, state);
+    const result = processPersonContributions(personId, 2025, 60000, 0, state, testSettings);
     
     // Available: 30000 (2025) + 25000 (2021) + 25000 (2022) = 80000
     expect(result.availableCarryForward).toBe(50000);

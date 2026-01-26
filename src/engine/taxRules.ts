@@ -1,3 +1,6 @@
+import type { SuperSettings } from '../schemas/settings';
+import { defaultSuperSettings } from '../schemas/settings';
+
 export interface RuleContext {
   taxableIncome: number;
   concessionalContributions: number;
@@ -29,24 +32,27 @@ export function applyRule(ctx: RuleContext, rule: TaxRule): number {
   }
 }
 
-export const rulesByYear: Record<number, TaxRule[]> = {
-  2024: [
-    { type: 'div293', threshold: 250000, rate: 0.15 },
-  ],
-  2025: [
-    { type: 'div293', threshold: 250000, rate: 0.15 },
-  ],
-};
+/**
+ * Get tax rules from super settings
+ */
+export function getRulesFromSettings(superSettings: SuperSettings = defaultSuperSettings): TaxRule[] {
+  return [
+    { 
+      type: 'div293', 
+      threshold: superSettings.div293Threshold, 
+      rate: superSettings.div293Rate,
+    },
+  ];
+}
 
-export function calculateAdditionalTaxes(ctx: RuleContext, year: number): number {
-  let rules = rulesByYear[year];
-  
-  if (!rules) {
-    const years = Object.keys(rulesByYear).map(Number).sort((a, b) => b - a);
-    const mostRecentYear = years.find(y => y <= year) ?? years[0];
-    rules = rulesByYear[mostRecentYear] ?? [];
-  }
-  
+/**
+ * Calculate additional taxes using settings
+ */
+export function calculateAdditionalTaxes(
+  ctx: RuleContext, 
+  superSettings: SuperSettings = defaultSuperSettings
+): number {
+  const rules = getRulesFromSettings(superSettings);
   return rules.reduce((total, rule) => total + applyRule(ctx, rule), 0);
 }
 
@@ -58,41 +64,26 @@ export interface Div293TaxResult {
   concessionalContributions: number;
 }
 
+/**
+ * Calculate Division 293 tax
+ */
 export function calculateDiv293(
   taxableIncome: number,
   concessionalContributions: number,
-  year: number
+  superSettings: SuperSettings = defaultSuperSettings
 ): Div293TaxResult {
-  let rules = rulesByYear[year];
-  
-  if (!rules) {
-    const years = Object.keys(rulesByYear).map(Number).sort((a, b) => b - a);
-    const mostRecentYear = years.find(y => y <= year) ?? years[0];
-    rules = rulesByYear[mostRecentYear] ?? [];
-  }
-  
-  const div293Rule = rules.find((r): r is Div293Rule => r.type === 'div293');
-  
-  if (!div293Rule) {
-    return {
-      applies: false,
-      taxAmount: 0,
-      adjustedIncome: taxableIncome + concessionalContributions,
-      threshold: 250000,
-      concessionalContributions,
-    };
-  }
+  const { div293Threshold, div293Rate } = superSettings;
   
   const adjustedIncome = taxableIncome + concessionalContributions;
-  const excess = Math.max(0, adjustedIncome - div293Rule.threshold);
+  const excess = Math.max(0, adjustedIncome - div293Threshold);
   const taxBase = Math.min(excess, concessionalContributions);
-  const taxAmount = taxBase * div293Rule.rate;
+  const taxAmount = taxBase * div293Rate;
   
   return {
     applies: taxAmount > 0,
     taxAmount,
     adjustedIncome,
-    threshold: div293Rule.threshold,
+    threshold: div293Threshold,
     concessionalContributions,
   };
 }
