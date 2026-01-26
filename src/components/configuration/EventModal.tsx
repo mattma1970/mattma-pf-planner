@@ -2,6 +2,7 @@ import { Modal } from '../ui';
 import { EventForm } from './EventForm';
 import type { Event } from '../../schemas/event';
 import type { Account } from '../../schemas/account';
+import type { Person } from '../../schemas/person';
 import type { ForecastResult } from '../../schemas/forecast';
 
 interface EventModalProps {
@@ -9,11 +10,12 @@ interface EventModalProps {
   onClose: () => void;
   event?: Event;
   accounts: Account[];
+  persons?: Person[];
   forecast?: ForecastResult | null;
   onSave: (data: Omit<Event, 'id'>) => void;
 }
 
-export function EventModal({ isOpen, onClose, event, accounts, forecast, onSave }: EventModalProps) {
+export function EventModal({ isOpen, onClose, event, accounts, persons, forecast, onSave }: EventModalProps) {
   const title = event ? 'Edit Event' : 'Add Event';
 
   const handleSubmit = (data: Omit<Event, 'id'>) => {
@@ -26,6 +28,7 @@ export function EventModal({ isOpen, onClose, event, accounts, forecast, onSave 
       <EventForm
         event={event}
         accounts={accounts}
+        persons={persons}
         forecast={forecast}
         onSubmit={handleSubmit}
         onCancel={onClose}

@@ -118,7 +118,13 @@ export class IndexedDBRepository implements DataRepository {
       return { ...defaultSettings };
     }
     const { id: _id, ...rest } = settings;
-    return rest;
+    // Merge with defaults to ensure new fields (like super) are present
+    return {
+      ...defaultSettings,
+      ...rest,
+      // Deep merge for nested objects
+      super: { ...defaultSettings.super, ...rest.super },
+    };
   }
 
   async saveSettings(settings: Settings): Promise<void> {

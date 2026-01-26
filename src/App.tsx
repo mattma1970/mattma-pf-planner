@@ -212,6 +212,7 @@ function App() {
         onClose={() => setEventModalOpen(false)}
         event={editingEvent ?? undefined}
         accounts={accounts as unknown as Account[]}
+        persons={persons}
         forecast={forecast}
         onSave={handleSaveEvent}
       />

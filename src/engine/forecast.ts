@@ -13,10 +13,20 @@ import type {
   TaxEvent,
   TaxAggregation,
   TaxSchedule,
+  OffBalanceSheetItem,
 } from '../schemas';
 import { calculateIncomeTax, calculateCapitalGain, type CgtCalculationResult } from './tax';
 import { resolveAssumptionForYear } from './assumptions';
 import { isAccountActive, projectAccountValue, handleAccountTransfer, getAccountAcquisitionYear } from './accounts';
+import {
+  initializeCarryForwardStates,
+  aggregateContributionsByPerson,
+  processPersonContributions,
+  createCarryForwardOffBalanceSheetItems,
+  type CarryForwardState,
+  type ContributionProcessingResult,
+} from './superContributions';
+import { calculateDiv293 } from './taxRules';
 
 interface PendingCgtEvent {
   accountId: string;
@@ -60,6 +70,9 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
 
   let peakAssets = 0;
   let peakAssetsYear = startYear;
+  
+  // Initialize carry-forward state for super contributions
+  let carryForwardStates = initializeCarryForwardStates(persons);
 
   for (let year = startYear; year <= endYear; year++) {
     const resolvedAssumptions = resolveAssumptions(assumptions, year, sortedEpochs);
@@ -188,11 +201,21 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     }
 
     // ===========================================
-    // PHASE 3: Apply user transfer events
+    // PHASE 3: Apply user transfer events and super contributions
     // These happen AFTER lifecycle transfers, so proceeds are available
     // ===========================================
     
     const userTransferFlows = new Map<string, number>(); // accountId -> net change from user transfers
+    
+    // Track super contributions for this year (for tax calculations)
+    const superContributionsByAccount = new Map<string, { 
+      concessional: number; 
+      nonConcessional: number; 
+      personId: string;
+    }>();
+    
+    // Track super contribution flows separately from transfers (for proper reporting as contributions)
+    const superContributionFlows = new Map<string, number>(); // accountId -> contribution amount
     
     for (const event of yearEvents) {
       if (event.type === 'transfer' && event.sourceAccountId && event.targetAccountId) {
@@ -220,6 +243,38 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           (userTransferFlows.get(event.targetAccountId) ?? 0) + transferAmount
         );
       }
+      
+      // Handle super contribution events
+      if (event.type === 'superContribution' && event.superContribution && event.targetAccountId) {
+        const { contributionType, memberPersonId } = event.superContribution;
+        
+        // Track contribution to target super account separately (not as a transfer)
+        superContributionFlows.set(
+          event.targetAccountId,
+          (superContributionFlows.get(event.targetAccountId) ?? 0) + event.amount
+        );
+        
+        // If there's a source account (salary sacrifice, personal contribution), deduct as transfer
+        if (event.sourceAccountId) {
+          userTransferFlows.set(
+            event.sourceAccountId,
+            (userTransferFlows.get(event.sourceAccountId) ?? 0) - event.amount
+          );
+        }
+        
+        // Track contributions by super account for tax calculations
+        const existing = superContributionsByAccount.get(event.targetAccountId) ?? { 
+          concessional: 0, 
+          nonConcessional: 0, 
+          personId: memberPersonId 
+        };
+        if (contributionType === 'concessional') {
+          existing.concessional += event.amount;
+        } else {
+          existing.nonConcessional += event.amount;
+        }
+        superContributionsByAccount.set(event.targetAccountId, existing);
+      }
     }
 
     // ===========================================
@@ -240,6 +295,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       // Get flow amounts
       const lifecycleChange = lifecycleFlows.get(account.id) ?? 0;
       const userTransferChange = userTransferFlows.get(account.id) ?? 0;
+      const superContributionChange = superContributionFlows.get(account.id) ?? 0;
 
       let growth = 0;
       let projectedValue = openingValue;
@@ -258,10 +314,13 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       
       // Track user transfers as transfers (both in and out)
       transfers += userTransferChange;
+      
+      // Track super contributions as contributions (not transfers)
+      contributions += superContributionChange;
 
       if (isActive && !isLifecycleEnding) {
         // Calculate balance for growth based on settings.growthCalculationMethod
-        const totalTransfers = lifecycleChange + userTransferChange;
+        const totalTransfers = lifecycleChange + userTransferChange + superContributionChange;
         let balanceForGrowth: number;
         
         if (settings.growthCalculationMethod === 'averageBalance') {
@@ -296,8 +355,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           // Add the other half that wasn't in the growth base
           projectedValue += 0.5 * totalTransfers;
         } else {
-          // For opening balance method, add lifecycle inflows after growth
-          projectedValue += lifecycleContribution;
+          // For opening balance method, add lifecycle inflows and super contributions after growth
+          projectedValue += lifecycleContribution + superContributionChange;
         }
 
         // Process non-transfer events (contributions/withdrawals) - don't add to contributions again
@@ -644,6 +703,126 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       }
     }
 
+    // ===========================================
+    // Super contribution tax processing
+    // 1. 15% contributions tax (deducted from super account)
+    // 2. Division 293 tax (for high-income earners)
+    // ===========================================
+    
+    // Track super contribution processing results for tax calculations
+    const superContributionResults: ContributionProcessingResult[] = [];
+    
+    if (settings.super && superContributionsByAccount.size > 0) {
+      for (const [superAccountId, contribs] of superContributionsByAccount) {
+        const superAccount = accounts.find(a => a.id === superAccountId);
+        if (!superAccount) continue;
+        
+        const superResult = accountResults.get(superAccountId);
+        if (!superResult) continue;
+        
+        // Get or initialize carry-forward state for this person
+        const currentState = carryForwardStates.get(contribs.personId) ?? { 
+          personId: contribs.personId, 
+          unusedCaps: [] 
+        };
+        
+        // Process contributions
+        const result = processPersonContributions(
+          contribs.personId,
+          year,
+          contribs.concessional,
+          contribs.nonConcessional,
+          currentState,
+          settings.super
+        );
+        
+        superContributionResults.push(result);
+        
+        // Deduct 15% contributions tax from super account (for concessional contributions within cap)
+        if (result.contributionsTax > 0) {
+          superResult.withdrawals += result.contributionsTax;
+          superResult.endValue -= result.contributionsTax;
+          accountValues.set(superAccountId, superResult.endValue);
+          
+          if (!superResult.cashflowDetails) superResult.cashflowDetails = [];
+          superResult.cashflowDetails.push({
+            description: `Super contributions tax (15%)`,
+            amount: result.contributionsTax,
+            type: 'withdrawal',
+          });
+          
+          // Add tax event for contributions tax
+          taxEvents.push({
+            id: uuidv4(),
+            year,
+            type: 'superContributionTax',
+            description: `Contributions Tax: ${superAccount.name}`,
+            sourceAccountId: superAccountId,
+            sourceAccountName: superAccount.name,
+            assessableAmount: 0, // Not assessable income - already taxed at source
+            fundedFromAccountId: superAccountId, // Paid from super account
+            fundedFromAccountName: superAccount.name,
+          });
+        }
+        
+        // Calculate Division 293 tax if applicable
+        const div293Result = calculateDiv293(
+          totalIncome, // Use total assessable income for the year
+          contribs.concessional,
+          settings.super
+        );
+        
+        if (div293Result.applies && div293Result.taxAmount > 0) {
+          // Division 293 is paid from the default tax funding account (or super account)
+          const div293FundingAccountId = superAccount.taxFundedFromAccountId ?? 
+            settings.defaultTaxFundingAccountId ?? superAccountId;
+          const div293FundingAccount = accounts.find(a => a.id === div293FundingAccountId) ?? superAccount;
+          
+          // Deduct from funding account
+          const fundingResult = accountResults.get(div293FundingAccountId);
+          if (fundingResult) {
+            fundingResult.withdrawals += div293Result.taxAmount;
+            fundingResult.endValue -= div293Result.taxAmount;
+            accountValues.set(div293FundingAccountId, fundingResult.endValue);
+            
+            if (!fundingResult.cashflowDetails) fundingResult.cashflowDetails = [];
+            fundingResult.cashflowDetails.push({
+              description: `Division 293 tax`,
+              amount: div293Result.taxAmount,
+              type: 'withdrawal',
+            });
+          }
+          
+          taxEvents.push({
+            id: uuidv4(),
+            year,
+            type: 'division293Tax',
+            description: `Div 293: ${superAccount.name}`,
+            sourceAccountId: superAccountId,
+            sourceAccountName: superAccount.name,
+            assessableAmount: 0, // Not assessable income
+            fundedFromAccountId: div293FundingAccountId,
+            fundedFromAccountName: div293FundingAccount.name,
+          });
+        }
+        
+        // Handle excess concessional contributions (added to assessable income)
+        if (result.excessConcessional > 0) {
+          taxEvents.push({
+            id: uuidv4(),
+            year,
+            type: 'incomeTax',
+            description: `Excess concessional contributions`,
+            sourceAccountId: superAccountId,
+            sourceAccountName: superAccount.name,
+            assessableAmount: result.excessConcessional,
+            fundedFromAccountId: defaultFundingAccountId,
+            fundedFromAccountName: defaultFundingAccount?.name ?? 'Not configured',
+          });
+        }
+      }
+    }
+
     // Aggregate tax by funding account
     const aggregationMap = new Map<string, { 
       fundedFromAccountName: string;
@@ -796,6 +975,50 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       peakAssetsYear = year;
     }
 
+    // ===========================================
+    // Process super contributions and carry-forward
+    // ===========================================
+    const offBalanceSheet: OffBalanceSheetItem[] = [];
+    
+    if (persons.length > 0 && settings.super) {
+      // Aggregate contributions by person for this year
+      const contributionsByPerson = aggregateContributionsByPerson(events, year, persons);
+      
+      // Process each person's contributions
+      const newCarryForwardStates = new Map<string, CarryForwardState>();
+      
+      for (const person of persons) {
+        const personContribs = contributionsByPerson.get(person.id);
+        const currentState = carryForwardStates.get(person.id) ?? { 
+          personId: person.id, 
+          unusedCaps: [] 
+        };
+        
+        const result = processPersonContributions(
+          person.id,
+          year,
+          personContribs?.concessional ?? 0,
+          personContribs?.nonConcessional ?? 0,
+          currentState,
+          settings.super
+        );
+        
+        newCarryForwardStates.set(person.id, result.newCarryForwardState);
+      }
+      
+      // Update carry-forward states for next year
+      carryForwardStates = newCarryForwardStates;
+      
+      // Create off-balance sheet items for carry-forward balances
+      const carryForwardItems = createCarryForwardOffBalanceSheetItems(
+        carryForwardStates,
+        persons,
+        year,
+        settings.super
+      );
+      offBalanceSheet.push(...carryForwardItems);
+    }
+
     years.push({
       year,
       accounts: yearAccounts,
@@ -808,6 +1031,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       taxAggregations,
       netPosition,
       resolvedAssumptions,
+      offBalanceSheet: offBalanceSheet.length > 0 ? offBalanceSheet : undefined,
     });
   }
 

@@ -1132,4 +1132,272 @@ describe('calculateForecast', () => {
       expect(loan2027.endValue).toBeLessThan(result.years[0].accounts.find(a => a.accountId === carLoan.id)!.endValue);
     });
   });
+
+  describe('super contribution carry-forward', () => {
+    it('tracks carry-forward in off-balance sheet when no contributions made', () => {
+      const result = calculateForecast({
+        accounts: [],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [defaultPerson],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      // Each year should have carry-forward accumulated
+      const year2025 = result.years.find(y => y.year === 2025)!;
+      const year2026 = result.years.find(y => y.year === 2026)!;
+      const year2027 = result.years.find(y => y.year === 2027)!;
+
+      // With no contributions, full cap ($30k) should be carried forward each year
+      expect(year2025.offBalanceSheet).toBeDefined();
+      expect(year2025.offBalanceSheet!.length).toBe(1);
+      expect(year2025.offBalanceSheet![0].type).toBe('carryForwardContribution');
+      expect(year2025.offBalanceSheet![0].value).toBe(30000);
+
+      // Year 2 should have 2 years of carry-forward
+      expect(year2026.offBalanceSheet![0].value).toBe(60000);
+
+      // Year 3 should have 3 years of carry-forward
+      expect(year2027.offBalanceSheet![0].value).toBe(90000);
+    });
+
+    it('reduces carry-forward when contributions are made', () => {
+      const superContributionEvent: Event = {
+        id: 'super-contrib-1111-1111-111111111111',
+        year: 2026,
+        type: 'superContribution',
+        description: 'Salary sacrifice',
+        amount: 20000,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'salarySacrifice',
+          memberPersonId: defaultPerson.id,
+          reducesAssessableIncome: true,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [superContributionEvent],
+        persons: [defaultPerson],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2025 = result.years.find(y => y.year === 2025)!;
+      const year2026 = result.years.find(y => y.year === 2026)!;
+      const year2027 = result.years.find(y => y.year === 2027)!;
+
+      // Year 1: No contributions, full $30k carry-forward
+      expect(year2025.offBalanceSheet![0].value).toBe(30000);
+
+      // Year 2: $20k contribution, so only $10k unused from this year
+      // Total: $30k (year 1) + $10k (year 2) = $40k
+      expect(year2026.offBalanceSheet![0].value).toBe(40000);
+
+      // Year 3: No contributions, full $30k added
+      // Total: $30k (year 1) + $10k (year 2) + $30k (year 3) = $70k
+      expect(year2027.offBalanceSheet![0].value).toBe(70000);
+    });
+  });
+
+  describe('super contribution tax integration', () => {
+    const superAccount: Account = {
+      id: 'super-1111-1111-1111-111111111111',
+      name: 'Super Fund',
+      type: 'asset',
+      initialValue: 100000,
+      growthProfile: { type: 'fixed', rate: 0.07 },
+      assetSubType: 'superannuation',
+      superConfig: { phase: 'accumulation' },
+    };
+
+    const bankAccount: Account = {
+      id: 'bank-1111-1111-1111-111111111111',
+      name: 'Bank',
+      type: 'asset',
+      initialValue: 50000,
+      growthProfile: { type: 'fixed', rate: 0.02 },
+    };
+
+    const person: Person = {
+      id: 'person-1111-1111-1111-111111111111',
+      name: 'Test Person',
+      birthYear: 1980,
+    };
+
+    it('applies 15% contributions tax on concessional contributions', () => {
+      const contributionEvent: Event = {
+        id: 'event-1111-1111-1111-111111111111',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Employer SG',
+        amount: 20000,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'employerSG',
+          memberPersonId: person.id,
+          reducesAssessableIncome: false,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [superAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [contributionEvent],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const superResult = year2025.accounts.find(a => a.accountId === superAccount.id)!;
+
+      // Super account: 100k + 7k growth + 20k contribution - 3k tax (15% of 20k) = 124k
+      const expectedContributionsTax = 20000 * 0.15; // 3000
+      expect(superResult.contributions).toBe(20000);
+      expect(superResult.withdrawals).toBe(expectedContributionsTax);
+      expect(superResult.endValue).toBe(100000 * 1.07 + 20000 - expectedContributionsTax);
+
+      // Check for contributions tax event
+      const contribTaxEvent = year2025.taxEvents.find(e => e.type === 'superContributionTax');
+      expect(contribTaxEvent).toBeDefined();
+      expect(contribTaxEvent!.description).toContain('Contributions Tax');
+    });
+
+    it('applies Division 293 tax for high-income earners', () => {
+      const incomeAccount: Account = {
+        id: 'income-1111-1111-1111-111111111111',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 260000, // High income
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: bankAccount.id,
+      };
+
+      const contributionEvent: Event = {
+        id: 'event-2222-2222-2222-222222222222',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Employer SG',
+        amount: 27500,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'employerSG',
+          memberPersonId: person.id,
+          reducesAssessableIncome: false,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [superAccount, bankAccount, incomeAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [contributionEvent],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+
+      // Check for Division 293 tax event
+      // Income: $260k + concessional: $27.5k = $287.5k (above $250k threshold)
+      // Div 293 tax base: min(excess, concessional) = min($37.5k, $27.5k) = $27.5k
+      // Div 293 tax: $27.5k * 15% = $4,125
+      const div293Event = year2025.taxEvents.find(e => e.type === 'division293Tax');
+      expect(div293Event).toBeDefined();
+      expect(div293Event!.description).toContain('Div 293');
+    });
+
+    it('deducts salary sacrifice from source account and adds to super', () => {
+      const contributionEvent: Event = {
+        id: 'event-3333-3333-3333-333333333333',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Salary Sacrifice',
+        amount: 15000,
+        sourceAccountId: bankAccount.id,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'salarySacrifice',
+          memberPersonId: person.id,
+          reducesAssessableIncome: true,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [superAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [contributionEvent],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const superResult = year2025.accounts.find(a => a.accountId === superAccount.id)!;
+      const bankResult = year2025.accounts.find(a => a.accountId === bankAccount.id)!;
+
+      // Bank: 50k * 1.02 - 15k contribution = 36k
+      expect(bankResult.transfers).toBe(-15000);
+      
+      // Super: 100k * 1.07 + 15k - 2.25k tax = 119.75k
+      const expectedTax = 15000 * 0.15; // 2250
+      expect(superResult.contributions).toBe(15000);
+      expect(superResult.withdrawals).toBe(expectedTax);
+    });
+
+    it('does not apply contributions tax on non-concessional contributions', () => {
+      const contributionEvent: Event = {
+        id: 'event-4444-4444-4444-444444444444',
+        year: 2025,
+        type: 'superContribution',
+        description: 'After-tax contribution',
+        amount: 50000,
+        sourceAccountId: bankAccount.id,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'nonConcessional',
+          source: 'personalAfterTax',
+          memberPersonId: person.id,
+          reducesAssessableIncome: false,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [superAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [contributionEvent],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const superResult = year2025.accounts.find(a => a.accountId === superAccount.id)!;
+
+      // No contributions tax for non-concessional
+      // Super: 100k * 1.07 + 50k = 157k
+      expect(superResult.contributions).toBe(50000);
+      expect(superResult.withdrawals).toBe(0);
+      expect(superResult.endValue).toBe(100000 * 1.07 + 50000);
+    });
+  });
 });

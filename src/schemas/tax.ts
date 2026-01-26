@@ -82,11 +82,11 @@ export const TaxEventTypeSchema = z.enum([
 export type TaxEventType = z.infer<typeof TaxEventTypeSchema>;
 
 // Event-specific tax treatments
+// Note: superContribution events have their own event type with built-in tax handling
+// Note: CGT is handled via account endBehavior: 'sell', not via events
 export const EventTaxTreatmentTypeSchema = z.enum([
   'none',
   'taxDeduction',
-  'capitalGain',
-  'superContribution',
 ]);
 export type EventTaxTreatmentType = z.infer<typeof EventTaxTreatmentTypeSchema>;
 
