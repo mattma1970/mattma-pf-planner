@@ -1,15 +1,17 @@
 import { useState } from 'react';
 import { Button, Input, Select } from '../ui';
-import type { Account, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType } from '../../schemas/account';
+import type { Account, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType, AssetSubType, SuperPhase } from '../../schemas/account';
+import type { Person } from '../../schemas/person';
 
 interface AccountFormProps {
   account?: Account;
   accounts: Account[];
+  persons?: Person[];
   onSubmit: (data: Omit<Account, 'id'>) => void;
   onCancel: () => void;
 }
 
-export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFormProps) {
+export function AccountForm({ account, accounts, persons = [], onSubmit, onCancel }: AccountFormProps) {
   const [name, setName] = useState(account?.name ?? '');
   const [type, setType] = useState(account?.type ?? 'income');
   const [initialValue, setInitialValue] = useState(account?.initialValue?.toString() ?? '0');
@@ -102,6 +104,12 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
   const [offsetAccountId, setOffsetAccountId] = useState(account?.offsetAccountId ?? '');
   const [payoffFromAccountId, setPayoffFromAccountId] = useState(account?.payoffFromAccountId ?? '');
 
+  // Superannuation-specific settings
+  const [assetSubType, setAssetSubType] = useState<AssetSubType>(account?.assetSubType ?? 'generic');
+  const [superPhase, setSuperPhase] = useState<SuperPhase>(account?.superConfig?.phase ?? 'accumulation');
+  const [superMemberPersonId, setSuperMemberPersonId] = useState(account?.superConfig?.memberPersonId ?? '');
+  const [preservationAgeOverride, setPreservationAgeOverride] = useState(account?.superConfig?.preservationAgeOverride?.toString() ?? '');
+
   const otherAccounts = accounts.filter((a) => a.id !== account?.id);
   const assetAccounts = accounts.filter((a) => a.type === 'asset' && a.id !== account?.id);
   const passThroughIncomeAccounts = accounts.filter((a) => a.type === 'income' && a.passThrough && a.id !== account?.id);
@@ -191,6 +199,14 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
       calculatePayment: type === 'liability' ? calculatePayment : undefined,
       offsetAccountId: type === 'liability' && offsetAccountId ? offsetAccountId : undefined,
       payoffFromAccountId: type === 'liability' && payoffFromAccountId ? payoffFromAccountId : undefined,
+      
+      // Superannuation settings (for assets)
+      assetSubType: type === 'asset' ? assetSubType : undefined,
+      superConfig: type === 'asset' && assetSubType === 'superannuation' && superMemberPersonId ? {
+        phase: superPhase,
+        memberPersonId: superMemberPersonId,
+        preservationAgeOverride: preservationAgeOverride ? parseInt(preservationAgeOverride) : undefined,
+      } : undefined,
     });
   };
 
@@ -275,6 +291,66 @@ export function AccountForm({ account, accounts, onSubmit, onCancel }: AccountFo
           <option value="liquid">Liquid</option>
           <option value="fixed">Fixed</option>
         </Select>
+      )}
+
+      {type === 'asset' && (
+        <div className="border-t pt-4">
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Asset Type</h3>
+          <Select
+            label="Asset Sub-Type"
+            value={assetSubType}
+            onChange={(e) => setAssetSubType(e.target.value as AssetSubType)}
+          >
+            <option value="generic">Generic Asset</option>
+            <option value="superannuation">Superannuation</option>
+          </Select>
+          
+          {assetSubType === 'superannuation' && (
+            <div className="mt-4 bg-purple-50 border border-purple-200 rounded-lg p-4">
+              <h4 className="text-sm font-medium text-purple-800 mb-3">Superannuation Settings</h4>
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <Select
+                  label="Member"
+                  value={superMemberPersonId}
+                  onChange={(e) => setSuperMemberPersonId(e.target.value)}
+                >
+                  <option value="">Select person...</option>
+                  {persons.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </Select>
+                <Select
+                  label="Phase"
+                  value={superPhase}
+                  onChange={(e) => setSuperPhase(e.target.value as SuperPhase)}
+                >
+                  <option value="accumulation">Accumulation</option>
+                  <option value="pension">Pension</option>
+                </Select>
+              </div>
+              
+              <Input
+                label="Preservation Age Override"
+                type="number"
+                value={preservationAgeOverride}
+                onChange={(e) => setPreservationAgeOverride(e.target.value)}
+                placeholder="Leave blank for default (60)"
+              />
+              
+              <div className="mt-3 text-xs text-purple-600 space-y-1">
+                <p><strong>Accumulation:</strong> 15% tax on earnings, cannot withdraw until preservation age</p>
+                <p><strong>Pension:</strong> 0% tax on earnings, regular pension payments</p>
+                {superPhase === 'accumulation' && (
+                  <p className="mt-2">
+                    💡 Tip: Set an end condition at retirement age with "Transfer" behavior to 
+                    automatically move to a pension-phase super account.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       <Input

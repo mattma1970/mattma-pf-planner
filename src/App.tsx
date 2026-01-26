@@ -161,6 +161,7 @@ function App() {
         onClose={() => setAccountModalOpen(false)}
         account={editingAccount as unknown as Account | undefined}
         accounts={accounts as unknown as Account[]}
+        persons={persons}
         onSubmit={handleSaveAccount as (data: Omit<Account, 'id'>) => void}
       />
       <Modal isOpen={showEpochs} onClose={() => setShowEpochs(false)} title="Epochs & Assumptions" size="xl">
