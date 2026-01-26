@@ -24,21 +24,23 @@ export function createDefaultPerson(): Person {
   };
 }
 
-export function createDefaultEpochs(personId: string): Epoch[] {
+export function createDefaultEpochs(): Epoch[] {
   return [
     {
       id: uuidv4(),
       name: 'Accumulation',
-      startCondition: { type: 'year', year: currentYear },
-      endCondition: { type: 'age', personId, age: 60 },
+      startYear: currentYear,
+      endYear: currentYear + 25,
       order: 0,
+      color: '#3b82f6',
     },
     {
       id: uuidv4(),
       name: 'Retirement',
-      startCondition: { type: 'previousEpochEnd' },
-      endCondition: { type: 'age', personId, age: 90 },
+      startYear: currentYear + 26,
+      endYear: currentYear + 40,
       order: 1,
+      color: '#10b981',
     },
   ];
 }

@@ -49,17 +49,18 @@ This document outlines the staged delivery plan for the Retirement Financial Pla
 
 ---
 
-## Phase 2: Multi-Period & Basic Super
+## Phase 2: Epoch-Based Assumptions & Super Contributions
 
-**Goal:** Enable full retirement journey modeling
+**Goal:** Allow assumptions to vary over time and make superannuation contributions configurable
 
 | Feature | Description |
 |---------|-------------|
-| Multiple forecast periods | Chain of epochs with output→input flow |
-| Superannuation account type | Accumulation phase modeling |
-| Concessional contributions | Employer + salary sacrifice with basic caps |
-| Preservation age awareness | Flag when super becomes accessible |
-| Period transitions | Define how assets transfer between periods |
+| User-defined epochs | Create named time periods (e.g., "Accumulation", "Retirement") |
+| Per-epoch assumptions | Configure growth, CPI, investment returns per epoch |
+| Assumption sculpting | Different assumption profiles for different life stages |
+| Concessional tracking | Off-balance sheet tracking of concessional contributions |
+| Configurable caps | Set annual concessional contribution cap (e.g., $30,000) |
+| Excess contribution tax | Configurable penalty rate for contributions exceeding cap |
 
 ---
 
@@ -108,7 +109,7 @@ This document outlines the staged delivery plan for the Retirement Financial Pla
 | Phase | Focus | Key Deliverable |
 |-------|-------|-----------------|
 | 1 | Foundation (MVP) | Single-user spreadsheet view with configurable accounts |
-| 2 | Multi-Period & Basic Super | Epoch chaining, superannuation modeling |
+| 2 | Epoch-Based Assumptions & Super | Per-epoch assumptions, concessional contribution tracking |
 | 3 | Rule Engine | Configurable tax and super rules |
 | 4 | Scenarios | Stress testing and comparisons |
 | 5 | Polish | Goal setting, exports, mobile support |

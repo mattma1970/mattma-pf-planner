@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { calculateForecast } from './forecast';
-import type { Account, Assumptions, Person, Event, Settings } from '../schemas';
+import type { Account, Assumptions, Epoch, Person, Event, Settings } from '../schemas';
 import { defaultSettings } from '../schemas';
 
 describe('calculateForecast', () => {
@@ -11,6 +11,16 @@ describe('calculateForecast', () => {
   };
 
   const testSettings: Settings = { ...defaultSettings };
+
+  const defaultEpochs: Epoch[] = [
+    {
+      id: 'epoch-1111-1111-1111-111111111111',
+      name: 'Default',
+      startYear: 2020,
+      endYear: 2100,
+      order: 0,
+    },
+  ];
 
   const defaultPerson: Person = {
     id: 'person-1111-1111-1111-111111111111',
@@ -33,6 +43,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [incomeAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -80,6 +91,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [houseAccount, cashAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -121,6 +133,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [expenseAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -170,6 +183,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [salaryAccount, bankAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -207,6 +221,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [livingCostsAccount, bankAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -253,6 +268,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, houseAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [buyHouseEvent],
         persons: [],
         settings: testSettings,
@@ -288,6 +304,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [superAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [defaultPerson],
         settings: testSettings,
@@ -335,6 +352,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [salaryAccount, bankAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: settingsWithTaxFunding,
@@ -371,6 +389,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [salaryAccount, bankAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -412,6 +431,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [salaryAccount, bankAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: settingsWithTaxFunding,
@@ -456,6 +476,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, houseAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: { ...testSettings, growthCalculationMethod: 'openingBalance' },
@@ -495,6 +516,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, houseAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: { ...testSettings, growthCalculationMethod: 'averageBalance' },
@@ -547,6 +569,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, pensionAccount, expenseAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -602,6 +625,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, pensionAccount, expenseAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -655,6 +679,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, pensionAccount, expenseAccount],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -697,6 +722,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, mortgage],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -740,6 +766,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, mortgage],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -789,6 +816,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, offsetAccount, mortgage],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -837,6 +865,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, offsetAccount, mortgage],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -885,6 +914,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, mortgage],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -936,6 +966,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, mortgage],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -989,6 +1020,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, offsetAccount, mortgage],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -1043,6 +1075,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, property, propertyLoan],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,
@@ -1086,6 +1119,7 @@ describe('calculateForecast', () => {
       const result = calculateForecast({
         accounts: [bankAccount, carLoan],
         assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
         events: [],
         persons: [],
         settings: testSettings,

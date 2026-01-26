@@ -1,17 +1,19 @@
 import { useState, useEffect } from 'react';
-import { useAccounts, usePersons, useForecast, useAssumptions, useEvents, useSettings } from './hooks';
+import { useAccounts, usePersons, useForecast, useAssumptions, useEvents, useSettings, useEpochs } from './hooks';
 import { SpreadsheetView } from './components/spreadsheet';
 import { NetWorthChart, IncomeExpenseChart } from './components/charts';
-import { AccountModal, AssumptionsPanel, EventModal } from './components/configuration';
+import { AccountModal, EpochAssumptionsMatrix, EventModal } from './components/configuration';
 import { Header } from './components/Header';
 import { Modal, Button } from './components/ui';
 import type { Account } from './schemas/account';
 import type { Event } from './schemas/event';
-import type { Assumptions as PanelAssumptions } from './schemas/assumption';
+import type { Epoch } from './schemas/epoch';
+import type { Assumptions } from './schemas/assumption';
 
 function App() {
   const { accounts, create: createAccount, update: updateAccount, reorder: reorderAccounts } = useAccounts();
   const { events, create: createEvent, update: updateEvent, remove: removeEvent } = useEvents();
+  const { epochs, create: createEpoch, update: updateEpoch, remove: removeEpoch, refresh: refreshEpochs } = useEpochs();
   const { persons } = usePersons();
   const { assumptions, update: updateAssumptions } = useAssumptions();
   const { settings, updateSettings } = useSettings();
@@ -21,7 +23,7 @@ function App() {
 
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
-  const [showAssumptions, setShowAssumptions] = useState(false);
+  const [showEpochs, setShowEpochs] = useState(false);
   const [eventModalOpen, setEventModalOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<Event | null>(null);
   const [showEvents, setShowEvents] = useState(false);
@@ -30,7 +32,7 @@ function App() {
 
   useEffect(() => {
     refreshForecast();
-  }, [accounts, assumptions, events, settings, refreshForecast]);
+  }, [accounts, assumptions, epochs, events, settings, refreshForecast]);
 
   const handleAddAccount = () => {
     setEditingAccount(null);
@@ -58,9 +60,27 @@ function App() {
     }
   };
 
-  const handleSaveAssumptions = async (updated: PanelAssumptions) => {
+  const handleSaveEpoch = async (id: string, updates: Partial<Epoch>) => {
+    await updateEpoch(id, updates);
+    await refreshEpochs();
+    await refreshForecast();
+  };
+
+  const handleCreateEpoch = async (data: Omit<Epoch, 'id'>) => {
+    await createEpoch(data);
+    await refreshEpochs();
+    await refreshForecast();
+  };
+
+  const handleDeleteEpoch = async (id: string) => {
+    await removeEpoch(id);
+    await refreshEpochs();
+    await refreshForecast();
+  };
+
+  const handleSaveAssumptions = async (updated: Assumptions) => {
     await updateAssumptions(updated as never);
-    setShowAssumptions(false);
+    await refreshForecast();
   };
 
   const handleAddEvent = () => {
@@ -86,19 +106,11 @@ function App() {
     await removeEvent(eventId);
   };
 
-  const panelAssumptions: PanelAssumptions | null = assumptions
-    ? {
-        cpi: { baseValue: assumptions.cpi.baseValue, overrides: [] },
-        investmentGrowth: { baseValue: assumptions.investmentGrowth.baseValue, overrides: [] },
-        superGrowth: { baseValue: assumptions.superGrowth.baseValue, overrides: [] },
-      }
-    : null;
-
   return (
     <div className="min-h-screen bg-gray-100">
       <Header 
         onAddAccount={handleAddAccount} 
-        onShowAssumptions={() => setShowAssumptions(true)}
+        onShowAssumptions={() => setShowEpochs(true)}
         onShowEvents={() => setShowEvents(true)}
       />
       <main className="p-4">
@@ -124,6 +136,7 @@ function App() {
             <SpreadsheetView
               forecast={forecast}
               accounts={accounts as unknown as Account[]}
+              epochs={epochs}
               persons={persons}
               events={events as unknown as Event[]}
               showEventHighlights={showEventHighlights}
@@ -150,9 +163,17 @@ function App() {
         accounts={accounts as unknown as Account[]}
         onSubmit={handleSaveAccount as (data: Omit<Account, 'id'>) => void}
       />
-      <Modal isOpen={showAssumptions} onClose={() => setShowAssumptions(false)} title="Assumptions">
-        {panelAssumptions && (
-          <AssumptionsPanel assumptions={panelAssumptions} onSave={handleSaveAssumptions} />
+      <Modal isOpen={showEpochs} onClose={() => setShowEpochs(false)} title="Epochs & Assumptions" size="xl">
+        {assumptions && (
+          <EpochAssumptionsMatrix
+            epochs={epochs}
+            accounts={accounts as unknown as Account[]}
+            assumptions={assumptions}
+            onSaveEpoch={handleSaveEpoch}
+            onCreateEpoch={handleCreateEpoch}
+            onDeleteEpoch={handleDeleteEpoch}
+            onSaveAssumptions={handleSaveAssumptions}
+          />
         )}
       </Modal>
       <Modal isOpen={showEvents} onClose={() => setShowEvents(false)} title="Events">

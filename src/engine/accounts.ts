@@ -44,12 +44,14 @@ export function projectAccountValue(
   _year: number,
   previousValue: number,
   assumptions: ResolvedAssumptions,
-  yearsSinceStart: number = 1
+  yearsSinceStart: number = 1,
+  epochGrowthParamOverride?: number
 ): number {
   const growthRate = calculateGrowthRate(
     account.growthProfile,
     assumptions,
-    yearsSinceStart
+    yearsSinceStart,
+    epochGrowthParamOverride
   );
 
   return previousValue * (1 + growthRate);
@@ -58,14 +60,15 @@ export function projectAccountValue(
 function calculateGrowthRate(
   profile: GrowthProfile,
   assumptions: ResolvedAssumptions,
-  yearsSinceStart: number
+  yearsSinceStart: number,
+  epochParamOverride?: number
 ): number {
   switch (profile.type) {
     case 'fixed':
-      return profile.rate;
+      return epochParamOverride ?? profile.rate;
 
     case 'cpiLinked': {
-      const value = profile.value ?? 0;
+      const value = epochParamOverride ?? profile.value ?? 0;
       switch (profile.operation) {
         case 'add':
           return assumptions.cpi + value;
@@ -78,11 +81,15 @@ function calculateGrowthRate(
       }
     }
 
-    case 'increasing':
-      return profile.rate + (profile.changePerYear ?? 0.005) * (yearsSinceStart - 1);
+    case 'increasing': {
+      const baseRate = epochParamOverride ?? profile.rate;
+      return baseRate + (profile.changePerYear ?? 0.005) * (yearsSinceStart - 1);
+    }
 
-    case 'decreasing':
-      return Math.max(0, profile.rate - (profile.changePerYear ?? 0.005) * (yearsSinceStart - 1));
+    case 'decreasing': {
+      const baseRate = epochParamOverride ?? profile.rate;
+      return Math.max(0, baseRate - (profile.changePerYear ?? 0.005) * (yearsSinceStart - 1));
+    }
 
     default:
       return 0;

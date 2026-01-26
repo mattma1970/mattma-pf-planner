@@ -17,6 +17,7 @@ import { AccountRow } from './AccountRow';
 import { GroupHeader } from './GroupHeader';
 import { YearCell } from './YearCell';
 import type { Account, AccountType } from '../../schemas/account';
+import type { Epoch } from '../../schemas/epoch';
 import type { Event } from '../../schemas/event';
 import type { Person } from '../../schemas/person';
 import type { ForecastResult, YearResult } from '../../schemas/forecast';
@@ -26,6 +27,7 @@ import { TaxDetailPanel } from '../tax';
 interface SpreadsheetViewProps {
   forecast: ForecastResult | null;
   accounts: Account[];
+  epochs?: Epoch[];
   persons?: Person[];
   events?: Event[];
   showEventHighlights?: boolean;
@@ -59,11 +61,17 @@ interface TaxDetailState {
   taxEvents: TaxEvent[];
 }
 
-export function SpreadsheetView({ forecast, accounts, persons = [], events = [], showEventHighlights = false, eventHighlightColor, onAccountClick, onReorder }: SpreadsheetViewProps) {
+export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [], events = [], showEventHighlights = false, eventHighlightColor, onAccountClick, onReorder }: SpreadsheetViewProps) {
   const years = forecast?.years ?? [];
   const [selectedTaxDetail, setSelectedTaxDetail] = useState<TaxDetailState | null>(null);
   const [isTaxExpanded, setIsTaxExpanded] = useState(false);
   const [isCashflowExpanded, setIsCashflowExpanded] = useState(false);
+
+  const sortedEpochs = useMemo(() => [...epochs].sort((a, b) => a.order - b.order), [epochs]);
+
+  const getEpochForYear = (year: number): Epoch | undefined => {
+    return sortedEpochs.find(e => year >= e.startYear && year <= e.endYear);
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -231,6 +239,21 @@ export function SpreadsheetView({ forecast, accounts, persons = [], events = [],
               </th>
             ))}
           </tr>
+          {sortedEpochs.length > 0 && (
+            <tr>
+              <th className="sticky left-0 bg-gray-50 border-r border-gray-200 z-10"></th>
+              {years.map((y) => {
+                const epoch = getEpochForYear(y.year);
+                return (
+                  <th
+                    key={`epoch-${y.year}`}
+                    className="h-1 p-0"
+                    style={{ backgroundColor: epoch?.color || 'transparent' }}
+                  />
+                );
+              })}
+            </tr>
+          )}
         </thead>
         <tbody className="bg-white divide-y divide-gray-200">
           {accountsByType.income.length > 0 && (

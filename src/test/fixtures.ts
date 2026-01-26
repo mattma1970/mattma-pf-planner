@@ -1,4 +1,4 @@
-import type { Account, Person, AssumptionProfile, ResolvedAssumptions } from '../schemas';
+import type { Account, Epoch, Person, AssumptionProfile, ResolvedAssumptions } from '../schemas';
 
 export const samplePersons: Person[] = [
   {
@@ -90,3 +90,20 @@ export const sampleResolvedAssumptions: ResolvedAssumptions = {
   investmentGrowth: 0.06,
   superGrowth: 0.07,
 };
+
+export const sampleEpochs: Epoch[] = [
+  {
+    id: 'eeee1111-1111-1111-1111-111111111111',
+    name: 'Accumulation',
+    startYear: 2024,
+    endYear: 2049,
+    order: 0,
+  },
+  {
+    id: 'eeee2222-2222-2222-2222-222222222222',
+    name: 'Retirement',
+    startYear: 2050,
+    endYear: 2070,
+    order: 1,
+  },
+];

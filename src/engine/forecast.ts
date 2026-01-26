@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type {
   Account,
   Assumptions,
+  Epoch,
   Event,
   Person,
   ResolvedAssumptions,
@@ -28,6 +29,7 @@ interface PendingCgtEvent {
 export interface ForecastInput {
   accounts: Account[];
   assumptions: Assumptions;
+  epochs: Epoch[];
   events: Event[];
   persons: Person[];
   settings: Settings;
@@ -44,7 +46,9 @@ export interface ForecastInput {
  * 5. Derived flows (income deposits, expense withdrawals, asset funding, tax)
  */
 export function calculateForecast(input: ForecastInput): ForecastResult {
-  const { accounts, assumptions, events, persons, settings, startYear, endYear } = input;
+  const { accounts, assumptions, epochs, events, persons, settings, startYear, endYear } = input;
+  
+  const sortedEpochs = [...epochs].sort((a, b) => a.order - b.order);
 
   const years: YearResult[] = [];
   const accountValues: Map<string, number> = new Map();
@@ -58,7 +62,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
   let peakAssetsYear = startYear;
 
   for (let year = startYear; year <= endYear; year++) {
-    const resolvedAssumptions = resolveAssumptions(assumptions, year);
+    const resolvedAssumptions = resolveAssumptions(assumptions, year, sortedEpochs);
     const yearAccounts: AccountYearResult[] = [];
     let totalIncome = 0;
     let totalExpenses = 0;
@@ -272,7 +276,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           growth = 0;
         } else if (balanceForGrowth > 0) {
           const yearsSinceStart = year - (accountStartYears.get(account.id) ?? year) + 1;
-          projectedValue = projectAccountValue(account, year, balanceForGrowth, resolvedAssumptions, yearsSinceStart);
+          const epochGrowthOverride = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'growthRate');
+          projectedValue = projectAccountValue(account, year, balanceForGrowth, resolvedAssumptions, yearsSinceStart, epochGrowthOverride);
           growth = projectedValue - balanceForGrowth;
         } else {
           // No growth on zero or negative balances
@@ -314,9 +319,13 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         if (account.type === 'expense' && account.fundedByAccountId) {
           derivedFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal', description: `Expense: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
         }
-        if (account.type === 'asset' && account.returnRate && account.incomeTargetAccountId && balanceForGrowth > 0) {
-          const incomeGenerated = balanceForGrowth * account.returnRate;
-          derivedFlows.push({ accountId: account.incomeTargetAccountId, amount: incomeGenerated, type: 'contribution', description: `Return: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
+        if (account.type === 'asset' && account.incomeTargetAccountId && balanceForGrowth > 0) {
+          const epochReturnOverride = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'returnRate');
+          const effectiveReturnRate = epochReturnOverride ?? account.returnRate;
+          if (effectiveReturnRate) {
+            const incomeGenerated = balanceForGrowth * effectiveReturnRate;
+            derivedFlows.push({ accountId: account.incomeTargetAccountId, amount: incomeGenerated, type: 'contribution', description: `Return: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
+          }
         }
         if (account.type === 'asset' && account.fundedByAccountId) {
           // Only fund actual cash contributions, NOT unrealized growth (appreciation)
@@ -796,12 +805,66 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
   };
 }
 
-function resolveAssumptions(assumptions: Assumptions, year: number): ResolvedAssumptions {
-  const cpi = resolveAssumptionForYear(assumptions.cpi, year);
+function resolveAssumptions(
+  assumptions: Assumptions,
+  year: number,
+  epochs: Epoch[]
+): ResolvedAssumptions {
+  const sortedEpochs = [...epochs].sort((a, b) => a.order - b.order);
+  
+  const getEpochValue = (key: 'cpi' | 'investmentGrowth' | 'superGrowth'): number | undefined => {
+    for (let i = sortedEpochs.length - 1; i >= 0; i--) {
+      const epoch = sortedEpochs[i];
+      if (year >= epoch.startYear && year <= epoch.endYear) {
+        const override = epoch.globalAssumptions?.[key];
+        if (override !== undefined) return override;
+        
+        for (let j = i - 1; j >= 0; j--) {
+          const prevOverride = sortedEpochs[j].globalAssumptions?.[key];
+          if (prevOverride !== undefined) return prevOverride;
+        }
+        break;
+      }
+    }
+    return undefined;
+  };
+
+  const cpiOverride = getEpochValue('cpi');
+  const cpi = cpiOverride ?? resolveAssumptionForYear(assumptions.cpi, year);
+
+  const investmentGrowthOverride = getEpochValue('investmentGrowth');
+  const investmentGrowth = investmentGrowthOverride ?? resolveAssumptionForYear(assumptions.investmentGrowth, year, cpi);
+
+  const superGrowthOverride = getEpochValue('superGrowth');
+  const superGrowth = superGrowthOverride ?? resolveAssumptionForYear(assumptions.superGrowth, year, cpi);
 
   return {
     cpi,
-    investmentGrowth: resolveAssumptionForYear(assumptions.investmentGrowth, year, cpi),
-    superGrowth: resolveAssumptionForYear(assumptions.superGrowth, year, cpi),
+    investmentGrowth,
+    superGrowth,
   };
+}
+
+function getAccountAssumptionForEpoch(
+  account: Account,
+  year: number,
+  epochs: Epoch[],
+  field: 'growthRate' | 'returnRate'
+): number | undefined {
+  const sortedEpochs = [...epochs].sort((a, b) => a.order - b.order);
+  
+  for (let i = sortedEpochs.length - 1; i >= 0; i--) {
+    const epoch = sortedEpochs[i];
+    if (year >= epoch.startYear && year <= epoch.endYear) {
+      const override = epoch.accountAssumptions?.[account.id]?.[field];
+      if (override !== undefined) return override;
+      
+      for (let j = i - 1; j >= 0; j--) {
+        const prevOverride = sortedEpochs[j].accountAssumptions?.[account.id]?.[field];
+        if (prevOverride !== undefined) return prevOverride;
+      }
+      break;
+    }
+  }
+  return undefined;
 }
