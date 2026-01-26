@@ -41,6 +41,20 @@ export const SuperContributionClassificationSchema = z.object({
   deductibleAgainstIncome: z.boolean().default(false),
 });
 
+export const SuperAccumulationEarningsClassificationSchema = z.object({
+  kind: z.literal('superAccumulationEarnings'),
+  earningsTaxRate: z.number().default(0.15),
+  capitalGainsEffectiveRate: z.number().default(0.10),
+});
+export type SuperAccumulationEarningsClassification = z.infer<typeof SuperAccumulationEarningsClassificationSchema>;
+
+export const SuperPensionEarningsClassificationSchema = z.object({
+  kind: z.literal('superPensionEarnings'),
+  earningsTaxRate: z.number().default(0),
+  capitalGainsEffectiveRate: z.number().default(0),
+});
+export type SuperPensionEarningsClassification = z.infer<typeof SuperPensionEarningsClassificationSchema>;
+
 // Union of all tax classifications
 export const TaxClassificationSchema = z.discriminatedUnion('kind', [
   NoTaxClassificationSchema,
@@ -49,6 +63,8 @@ export const TaxClassificationSchema = z.discriminatedUnion('kind', [
   CapitalGainAssetClassificationSchema,
   CapitalGainRealisationClassificationSchema,
   SuperContributionClassificationSchema,
+  SuperAccumulationEarningsClassificationSchema,
+  SuperPensionEarningsClassificationSchema,
 ]);
 export type TaxClassification = z.infer<typeof TaxClassificationSchema>;
 
@@ -61,6 +77,7 @@ export const TaxEventTypeSchema = z.enum([
   'capitalGainsTax',
   'superContributionTax',
   'taxDeduction',
+  'division293Tax',
 ]);
 export type TaxEventType = z.infer<typeof TaxEventTypeSchema>;
 

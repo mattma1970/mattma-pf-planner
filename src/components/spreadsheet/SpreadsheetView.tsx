@@ -66,6 +66,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
   const [selectedTaxDetail, setSelectedTaxDetail] = useState<TaxDetailState | null>(null);
   const [isTaxExpanded, setIsTaxExpanded] = useState(false);
   const [isCashflowExpanded, setIsCashflowExpanded] = useState(false);
+  const [isOffBalanceSheetExpanded, setIsOffBalanceSheetExpanded] = useState(false);
 
   const sortedEpochs = useMemo(() => [...epochs].sort((a, b) => a.order - b.order), [epochs]);
 
@@ -196,6 +197,46 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
     }
     return map;
   }, [events, showEventHighlights]);
+
+  const offBalanceSheetData = useMemo(() => {
+    const itemsById = new Map<string, { id: string; label: string; type: string; personId?: string; valuesByYear: Map<number, number> }>();
+    const personNames = new Map(persons.map(p => [p.id, p.name]));
+    
+    for (const yearResult of years) {
+      for (const item of yearResult.offBalanceSheet ?? []) {
+        if (!itemsById.has(item.id)) {
+          itemsById.set(item.id, {
+            id: item.id,
+            label: item.label,
+            type: item.type,
+            personId: item.personId,
+            valuesByYear: new Map(),
+          });
+        }
+        itemsById.get(item.id)!.valuesByYear.set(yearResult.year, item.value);
+      }
+    }
+    
+    const itemsByType = new Map<string, typeof itemsById extends Map<string, infer V> ? V[] : never>();
+    for (const item of itemsById.values()) {
+      if (!itemsByType.has(item.type)) {
+        itemsByType.set(item.type, []);
+      }
+      itemsByType.get(item.type)!.push(item);
+    }
+    
+    const typeLabels: Record<string, string> = {
+      carryForwardContribution: 'Carry Forward Contributions',
+      frankingCredits: 'Franking Credits',
+    };
+    
+    return {
+      hasItems: itemsById.size > 0,
+      itemsByType,
+      typeLabels,
+      personNames,
+    };
+  }, [years, persons]);
 
   const handleDragEnd = (type: AccountType) => (event: DragEndEvent) => {
     const { active, over } = event;
@@ -755,6 +796,66 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
               </>
             );
           })}
+
+          {offBalanceSheetData.hasItems && (
+            <>
+              <tr className="bg-purple-50">
+                <th
+                  colSpan={colSpan}
+                  className="px-3 py-2 text-left font-semibold text-purple-800 sticky left-0 bg-purple-50"
+                >
+                  <button
+                    onClick={() => setIsOffBalanceSheetExpanded(!isOffBalanceSheetExpanded)}
+                    className="flex items-center gap-2 hover:text-purple-600"
+                  >
+                    <span className="text-gray-400">{isOffBalanceSheetExpanded ? '▼' : '▶'}</span>
+                    Off-Balance Sheet
+                  </button>
+                </th>
+              </tr>
+              
+              {isOffBalanceSheetExpanded && Array.from(offBalanceSheetData.itemsByType.entries()).map(([type, items]) => (
+                <>
+                  <tr key={`obs-type-${type}`} className="bg-purple-100/50">
+                    <td className="px-3 py-1.5 text-left font-medium text-purple-800 sticky left-0 bg-purple-100/50 border-r border-gray-200 min-w-48">
+                      {offBalanceSheetData.typeLabels[type] ?? type}
+                    </td>
+                    {years.map((yearData) => (
+                      <td key={yearData.year} className="px-3 py-1.5 text-right text-xs text-gray-400">
+                        {yearData.year}
+                      </td>
+                    ))}
+                  </tr>
+                  
+                  {items.map((item) => {
+                    const personName = item.personId ? offBalanceSheetData.personNames.get(item.personId) : undefined;
+                    const displayLabel = personName ? `${personName}` : item.label;
+                    
+                    return (
+                      <tr key={`obs-${item.id}`} className="bg-white">
+                        <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
+                          {displayLabel}
+                        </td>
+                        {years.map((yearData) => {
+                          const value = item.valuesByYear.get(yearData.year) ?? 0;
+                          return (
+                            <td key={yearData.year} className="px-3 py-1 text-right text-sm text-gray-600">
+                              {value !== 0 ? new Intl.NumberFormat('en-AU', {
+                                style: 'currency',
+                                currency: 'AUD',
+                                minimumFractionDigits: 0,
+                                maximumFractionDigits: 0,
+                              }).format(value) : '-'}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </>
+              ))}
+            </>
+          )}
 
           <tr className="bg-gray-100">
             <th

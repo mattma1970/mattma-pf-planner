@@ -4,6 +4,19 @@ import { TaxClassificationSchema } from './tax';
 export const AccountTypeSchema = z.enum(['income', 'expense', 'asset', 'liability']);
 export type AccountType = z.infer<typeof AccountTypeSchema>;
 
+export const AssetSubTypeSchema = z.enum(['generic', 'superannuation']);
+export type AssetSubType = z.infer<typeof AssetSubTypeSchema>;
+
+export const SuperPhaseSchema = z.enum(['accumulation', 'pension']);
+export type SuperPhase = z.infer<typeof SuperPhaseSchema>;
+
+export const SuperAccountConfigSchema = z.object({
+  memberPersonId: z.string(),
+  phase: SuperPhaseSchema,
+  preservationAgeOverride: z.number().int().optional(),
+});
+export type SuperAccountConfig = z.infer<typeof SuperAccountConfigSchema>;
+
 export const GrowthOperationSchema = z.enum(['add', 'subtract', 'multiply']);
 export type GrowthOperation = z.infer<typeof GrowthOperationSchema>;
 
@@ -49,6 +62,8 @@ export const AccountSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1),
   type: AccountTypeSchema,
+  assetSubType: AssetSubTypeSchema.optional(),
+  superConfig: SuperAccountConfigSchema.optional(),
   owner: z.string().optional(),
   initialValue: z.number(),
   growthProfile: GrowthProfileSchema,

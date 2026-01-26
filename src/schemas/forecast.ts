@@ -6,6 +6,15 @@ export const ResolvedAssumptionsSchema = z.object({
 });
 export type ResolvedAssumptions = z.infer<typeof ResolvedAssumptionsSchema>;
 
+export const OffBalanceSheetItemSchema = z.object({
+  id: z.string(),
+  type: z.enum(['carryForwardContribution', 'frankingCredits']),
+  label: z.string(),
+  personId: z.string().optional(),
+  value: z.number(),
+});
+export type OffBalanceSheetItem = z.infer<typeof OffBalanceSheetItemSchema>;
+
 export const CashflowItemSchema = z.object({
   description: z.string(),
   amount: z.number(),
@@ -41,6 +50,7 @@ export const YearResultSchema = z.object({
   taxAggregations: z.array(TaxAggregationSchema),
   netPosition: z.number(),
   resolvedAssumptions: ResolvedAssumptionsSchema,
+  offBalanceSheet: z.array(OffBalanceSheetItemSchema).optional(),
 });
 export type YearResult = z.infer<typeof YearResultSchema>;
 

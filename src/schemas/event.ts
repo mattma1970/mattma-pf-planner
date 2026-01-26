@@ -1,8 +1,33 @@
 import { z } from 'zod';
 import { TaxClassificationSchema, EventTaxTreatmentTypeSchema } from './tax';
 
-export const EventTypeSchema = z.enum(['income', 'expense', 'assetChange', 'liabilityChange', 'transfer']);
+export const EventTypeSchema = z.enum(['income', 'expense', 'assetChange', 'liabilityChange', 'transfer', 'superContribution']);
 export type EventType = z.infer<typeof EventTypeSchema>;
+
+// Super contribution types
+export const SuperContributionTypeSchema = z.enum(['concessional', 'nonConcessional']);
+export type SuperContributionType = z.infer<typeof SuperContributionTypeSchema>;
+
+// Super contribution source (for tracking and tax purposes)
+export const SuperContributionSourceSchema = z.enum([
+  'employerSG',           // Employer Super Guarantee (mandatory)
+  'employerAdditional',   // Employer contributions above SG
+  'salarySacrifice',      // Pre-tax salary sacrifice
+  'personalDeductible',   // Personal contributions claiming tax deduction
+  'personalAfterTax',     // Personal after-tax contributions (non-concessional)
+  'spouseContribution',   // Contributions from spouse
+  'governmentCoContribution', // Government co-contribution
+]);
+export type SuperContributionSource = z.infer<typeof SuperContributionSourceSchema>;
+
+// Super contribution configuration for events
+export const SuperContributionConfigSchema = z.object({
+  contributionType: SuperContributionTypeSchema,
+  source: SuperContributionSourceSchema,
+  memberPersonId: z.string(), // Person receiving the contribution
+  reducesAssessableIncome: z.boolean().default(false), // For salary sacrifice / personal deductible
+});
+export type SuperContributionConfig = z.infer<typeof SuperContributionConfigSchema>;
 
 export const EventSchema = z.object({
   id: z.string().uuid(),
@@ -27,5 +52,8 @@ export const EventSchema = z.object({
   // CGT fields for capital gain events
   costBase: z.number().optional(),
   acquisitionYear: z.number().int().optional(),
+  
+  // Super contribution fields (for type: 'superContribution')
+  superContribution: SuperContributionConfigSchema.optional(),
 });
 export type Event = z.infer<typeof EventSchema>;
