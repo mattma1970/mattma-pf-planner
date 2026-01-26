@@ -425,62 +425,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     }
 
     // ===========================================
-    // PHASE 6: Auto-topup processing
-    // ===========================================
-    
-    for (const account of accounts) {
-      if (account.type !== 'asset' || !account.autoTopup?.enabled) continue;
-      
-      const result = accountResults.get(account.id);
-      if (!result) continue;
-      
-      const threshold = account.autoTopup.threshold ?? 0;
-      
-      // Check if balance is below threshold
-      if (result.endValue < threshold) {
-        const sourceResult = accountResults.get(account.autoTopup.fromAccountId);
-        if (!sourceResult) continue;
-        
-        // Calculate topup amount
-        const targetBalance = account.autoTopup.targetBalance ?? threshold;
-        const topupAmount = targetBalance - result.endValue;
-        
-        if (topupAmount > 0) {
-          const sourceAccount = accounts.find(a => a.id === account.autoTopup!.fromAccountId);
-          
-          // Apply topup to target account
-          result.contributions += topupAmount;
-          result.endValue += topupAmount;
-          result.autoTopupApplied = true;
-          accountValues.set(account.id, result.endValue);
-          if (!result.cashflowDetails) result.cashflowDetails = [];
-          result.cashflowDetails.push({
-            description: `Auto top-up from: ${sourceAccount?.name ?? 'Unknown'}`,
-            amount: topupAmount,
-            type: 'contribution',
-            sourceAccountId: account.autoTopup.fromAccountId,
-            sourceAccountName: sourceAccount?.name,
-          });
-          
-          // Withdraw from source account (allow negative balance)
-          sourceResult.withdrawals += topupAmount;
-          sourceResult.endValue -= topupAmount;
-          sourceResult.autoTopupApplied = true;
-          accountValues.set(account.autoTopup.fromAccountId, sourceResult.endValue);
-          if (!sourceResult.cashflowDetails) sourceResult.cashflowDetails = [];
-          sourceResult.cashflowDetails.push({
-            description: `Auto top-up to: ${account.name}`,
-            amount: topupAmount,
-            type: 'withdrawal',
-            sourceAccountId: account.id,
-            sourceAccountName: account.name,
-          });
-        }
-      }
-    }
-
-    // ===========================================
-    // PHASE 7: Liability interest and payment processing
+    // PHASE 6: Liability interest and payment processing
     // ===========================================
     
     for (const account of accounts) {
@@ -599,7 +544,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     }
 
     // ===========================================
-    // PHASE 8: Tax calculations
+    // PHASE 7: Tax calculations
     // ===========================================
     
     const taxEvents: TaxEvent[] = [];
@@ -738,6 +683,62 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     }
 
     const netPosition = totalIncome - totalExpenses - taxPayable;
+
+    // ===========================================
+    // PHASE 8: Auto-topup processing
+    // Runs AFTER liability payments and tax so balance reflects all withdrawals
+    // ===========================================
+    
+    for (const account of accounts) {
+      if (account.type !== 'asset' || !account.autoTopup?.enabled) continue;
+      
+      const result = accountResults.get(account.id);
+      if (!result) continue;
+      
+      const threshold = account.autoTopup.threshold ?? 0;
+      
+      // Check if balance is below threshold
+      if (result.endValue < threshold) {
+        const sourceResult = accountResults.get(account.autoTopup.fromAccountId);
+        if (!sourceResult) continue;
+        
+        // Calculate topup amount
+        const targetBalance = account.autoTopup.targetBalance ?? threshold;
+        const topupAmount = targetBalance - result.endValue;
+        
+        if (topupAmount > 0) {
+          const sourceAccount = accounts.find(a => a.id === account.autoTopup!.fromAccountId);
+          
+          // Apply topup to target account
+          result.contributions += topupAmount;
+          result.endValue += topupAmount;
+          result.autoTopupApplied = true;
+          accountValues.set(account.id, result.endValue);
+          if (!result.cashflowDetails) result.cashflowDetails = [];
+          result.cashflowDetails.push({
+            description: `Auto top-up from: ${sourceAccount?.name ?? 'Unknown'}`,
+            amount: topupAmount,
+            type: 'contribution',
+            sourceAccountId: account.autoTopup.fromAccountId,
+            sourceAccountName: sourceAccount?.name,
+          });
+          
+          // Withdraw from source account (allow negative balance)
+          sourceResult.withdrawals += topupAmount;
+          sourceResult.endValue -= topupAmount;
+          sourceResult.autoTopupApplied = true;
+          accountValues.set(account.autoTopup.fromAccountId, sourceResult.endValue);
+          if (!sourceResult.cashflowDetails) sourceResult.cashflowDetails = [];
+          sourceResult.cashflowDetails.push({
+            description: `Auto top-up to: ${account.name}`,
+            amount: topupAmount,
+            type: 'withdrawal',
+            sourceAccountId: account.id,
+            sourceAccountName: account.name,
+          });
+        }
+      }
+    }
 
     for (const account of accounts) {
       const result = accountResults.get(account.id);

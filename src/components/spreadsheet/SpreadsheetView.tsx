@@ -751,6 +751,8 @@ export function SpreadsheetView({ forecast, accounts, persons = [], events = [],
               ))}
             </tr>
           ))}
+
+
         </tbody>
       </table>
 
