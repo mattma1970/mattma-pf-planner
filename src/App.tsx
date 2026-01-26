@@ -215,7 +215,7 @@ function App() {
         forecast={forecast}
         onSave={handleSaveEvent}
       />
-      <Modal isOpen={showSettings} onClose={() => setShowSettings(false)} title="Defaults">
+      <Modal isOpen={showSettings} onClose={() => setShowSettings(false)} title="Settings" size="lg">
         <div className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -268,6 +268,117 @@ function App() {
                 className="h-10 w-20 rounded border border-gray-300 cursor-pointer"
               />
               <span className="text-sm text-gray-500">{settings.eventHighlightColor}</span>
+            </div>
+          </div>
+
+          {/* Superannuation Settings */}
+          <div className="border-t pt-6">
+            <h3 className="text-sm font-semibold text-purple-800 mb-4">Superannuation Settings</h3>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Preservation Age
+                </label>
+                <input
+                  type="number"
+                  value={settings.super?.preservationAge ?? 67}
+                  onChange={(e) => updateSettings({ 
+                    super: { ...settings.super, preservationAge: parseInt(e.target.value) || 67 } 
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Carry Forward Years
+                </label>
+                <input
+                  type="number"
+                  value={settings.super?.carryForwardYears ?? 5}
+                  onChange={(e) => updateSettings({ 
+                    super: { ...settings.super, carryForwardYears: parseInt(e.target.value) || 5 } 
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 mt-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Concessional Cap ($)
+                </label>
+                <input
+                  type="number"
+                  value={settings.super?.concessionalCap ?? 30000}
+                  onChange={(e) => updateSettings({ 
+                    super: { ...settings.super, concessionalCap: parseInt(e.target.value) || 30000 } 
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Non-Concessional Cap ($)
+                </label>
+                <input
+                  type="number"
+                  value={settings.super?.nonConcessionalCap ?? 120000}
+                  onChange={(e) => updateSettings({ 
+                    super: { ...settings.super, nonConcessionalCap: parseInt(e.target.value) || 120000 } 
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 mt-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Contributions Tax Rate (%)
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={(settings.super?.contributionsTaxRate ?? 0.15) * 100}
+                  onChange={(e) => updateSettings({ 
+                    super: { ...settings.super, contributionsTaxRate: (parseFloat(e.target.value) || 15) / 100 } 
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Div 293 Rate (%)
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={(settings.super?.div293Rate ?? 0.15) * 100}
+                  onChange={(e) => updateSettings({ 
+                    super: { ...settings.super, div293Rate: (parseFloat(e.target.value) || 15) / 100 } 
+                  })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Division 293 Threshold ($)
+              </label>
+              <input
+                type="number"
+                value={settings.super?.div293Threshold ?? 250000}
+                onChange={(e) => updateSettings({ 
+                  super: { ...settings.super, div293Threshold: parseInt(e.target.value) || 250000 } 
+                })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Additional 15% tax applies when income + concessional contributions exceeds this threshold
+              </p>
             </div>
           </div>
         </div>
