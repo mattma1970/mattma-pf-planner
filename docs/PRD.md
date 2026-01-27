@@ -1,7 +1,7 @@
 # Product Requirements Document: Retirement Financial Planner
 
-**Version:** 0.1 (Draft)  
-**Last Updated:** 2026-01-25  
+**Version:** 0.2 (Draft)  
+**Last Updated:** 2026-01-27  
 **Status:** In Development
 
 ---
@@ -237,17 +237,109 @@ Events:
 
 ### 2.8 Scenarios
 
-**Scenarios** bundle overrides for comparison:
+**Scenarios** are a core feature enabling users to answer "what if" questions about their financial future. Each scenario represents an alternative set of assumptions, accounts, or events that can be compared against the base case.
 
-- **Base Case:** Uses all default assumptions
-- **Named Scenarios:** Override specific assumptions or events
+#### Why Scenarios Matter
 
-A scenario contains:
-- Assumption profile overrides (e.g., "Super growth = 1% for 2029-2031")
-- Additional events (e.g., "Market crash: Super loses 20% in 2029")
-- Account overrides (e.g., "Retirement delayed to 2037")
+Users need to explore questions like:
+- "What if there's a market downturn and super returns -1% for 3 years?"
+- "What if I buy an investment property for $1M in 2027?"
+- "What if I retire in 2027 instead of 2030?"
+- "What if I skip the downsizer contribution and keep it in the bank?"
+- "How much more would I need to spend $130k/year in retirement?"
+- "What if I sell my investment property at a $100k loss?"
 
-**UX:** Scenario switcher in header. Overridden values highlighted in spreadsheet. Side-by-side comparison view in later phase.
+#### Scenario Structure
+
+A scenario is a **delta-based overlay** on the base case, containing only the differences:
+
+| Component | Description |
+|-----------|-------------|
+| **Metadata** | Name (required), description (optional) |
+| **Assumption Overrides** | Changes to CPI, growth rates, etc. for specific year ranges |
+| **Account Overrides** | New accounts, modified accounts, or excluded accounts |
+| **Event Overrides** | New events, modified events, or removed events |
+
+**Delta-based approach benefits:**
+- Storage efficient (only differences stored)
+- Clear visibility of what's different
+- Easy to see impact of specific changes
+- Base case updates automatically flow through (unless overridden)
+
+#### Scenario Comparison
+
+Users can compare up to 5 scenarios simultaneously:
+
+**Net Worth Chart (Primary Visualization):**
+- Multiple scenario lines overlaid on single chart
+- Base case shown as solid line, alternatives as dashed
+- Distinct colors with legend showing name + description
+- Toggle individual scenarios on/off
+- Hover shows values for all scenarios at that year
+
+**Summary Metrics Table:**
+| Metric | Base Case | Scenario A | Scenario B | Δ from Base |
+|--------|-----------|------------|------------|-------------|
+| Final Net Worth | $2.1M | $1.8M | $2.4M | -$300k / +$300k |
+| Year Depleted | N/A | 2048 | N/A | — |
+| Peak Net Worth | $2.5M (2042) | $2.2M (2040) | $2.8M (2043) | — |
+| Min Net Worth | $150k (2035) | -$50k (2038) | $200k (2035) | — |
+
+**Additional Visualizations (Future):**
+- Income vs Expenses comparison across scenarios
+- Cash flow waterfall for specific years
+- Asset allocation over time
+
+#### Monte Carlo Simulation (Future Enhancement)
+
+Instead of single-point projections, Monte Carlo provides probability distributions:
+
+- Run N simulations (default 1000) with randomized assumptions
+- Display percentile bands (10th, 25th, 50th, 75th, 90th)
+- Configure which assumptions vary and by how much
+- Show "probability of success" (e.g., "85% chance of not running out")
+
+```
+Net Worth Projection with Monte Carlo Bands:
+
+        ^
+   $3M  |                    ╭──────── 90th percentile
+        |                ╭───╯
+   $2M  |            ╭───╯    ╭────── 50th (median)
+        |        ╭───╯    ╭───╯
+   $1M  |    ╭───╯    ╭───╯
+        | ───╯    ╭───╯
+    $0  |─────────╯──────────────────── 10th percentile
+        +────────────────────────────→
+         2026    2036    2046    2056
+```
+
+#### AI-Assisted Scenario Creation (Future)
+
+In future phases, a conversational AI will help users create scenarios:
+
+**User:** "What if I bought an investment property for $1M in 2027?"
+
+**AI:** Creates scenario with:
+- New asset: Investment Property, $1M, 5% growth
+- New income: Rental Income, $52k/year (5% yield), CPI-indexed
+- New expense: Property Costs, 0.5% of value
+- Suggested: Deposit source (which account funds purchase?)
+
+**User:** "What if the market crashes in 2030?"
+
+**AI:** Creates scenario with:
+- Override: Super growth -15% in 2030
+- Override: Share growth -20% in 2030
+- Suggested: Recovery assumptions for 2031+
+
+#### UX Flow
+
+1. **Scenario List:** Sidebar or dropdown showing all saved scenarios
+2. **Create Scenario:** Modal to name and optionally describe
+3. **Edit Scenario:** Same UI as base case, but changes stored as overrides
+4. **Compare View:** Dedicated page with chart + summary table
+5. **Promote to Base:** Action to make a scenario the new base case
 
 ---
 

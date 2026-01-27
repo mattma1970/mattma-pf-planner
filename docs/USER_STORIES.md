@@ -1,7 +1,7 @@
 # User Stories
 
-**Version:** 0.1 (Draft)  
-**Last Updated:** 2026-01-24
+**Version:** 0.2 (Draft)  
+**Last Updated:** 2026-01-27
 
 ---
 
@@ -572,26 +572,231 @@ And: Warning displayed: "Excess concessional contribution"
 
 ---
 
-## Phase 3: Multi-Person (Future)
+### Epic 13: Scenarios
 
-### US-P2.1: Create a scenario
-**As a** user  
-**I want to** create named scenarios  
-**So that** I can compare different assumptions
+Scenarios enable users to model alternative futures by overriding assumptions, modifying accounts, or changing events. This is a core feature for answering "what if" questions about retirement planning.
+
+**Common Scenario Examples:**
+- Market downturn: Super returns -1% for 3 years starting 2027
+- Investment property purchase: Buy $1M property in 2027 with rental income
+- Renovation: Increase rent on existing property after 2030 renovation
+- Early retirement: Stop working in 2027 instead of 2030
+- Skip contribution: Keep downsizer amount in bank instead of super
+- Spending change: Increase retirement spending to $130k/year indexed
+- Capital loss: Sell investment property at $100k loss
 
 ---
 
-### US-P2.2: Compare scenarios
+#### US-13.1: Create a scenario
 **As a** user  
-**I want to** view scenarios side by side  
-**So that** I can see how different assumptions affect outcomes
+**I want to** create a new scenario from my current financial state  
+**So that** I can explore alternative assumptions without affecting my base case
+
+**Acceptance Criteria:**
+- [ ] Can create a new scenario (starts as clone of current state)
+- [ ] Can create a blank scenario (no overrides)
+- [ ] Must provide a name (required)
+- [ ] Can optionally provide a description
+- [ ] New scenario appears in scenario list
+- [ ] Scenario is persisted
 
 ---
 
-### US-P2.3: Model superannuation
+#### US-13.2: Edit scenario metadata
 **As a** user  
-**I want to** add a super account with special rules  
-**So that** I can model contributions and preservation
+**I want to** edit a scenario's name and description  
+**So that** I can keep my scenarios organized and documented
+
+**Acceptance Criteria:**
+- [ ] Can change scenario name
+- [ ] Can change scenario description
+- [ ] Changes are persisted
+- [ ] Scenario list reflects updated name
+
+---
+
+#### US-13.3: Override assumptions in a scenario
+**As a** user  
+**I want to** override growth rates, CPI, or other assumptions for specific time periods  
+**So that** I can model different market conditions
+
+**Acceptance Criteria:**
+- [ ] Can override any global assumption (CPI, default growth, etc.)
+- [ ] Can specify year range for override (e.g., 2027-2030)
+- [ ] Can specify single year override
+- [ ] Override shows visually different from base values
+- [ ] Can clear an override to revert to base
+- [ ] Multiple overrides can be combined
+
+**Test Case:**
+```
+Given: Base case has super growth at 7%
+When: I create scenario "Market Downturn"
+And: Override super growth to -1% for 2027-2029
+Then: Forecast shows -1% growth for those years
+And: 2030+ reverts to 7%
+```
+
+---
+
+#### US-13.4: Add or modify accounts in a scenario
+**As a** user  
+**I want to** add new accounts or modify existing accounts within a scenario  
+**So that** I can model acquiring new assets or changing existing ones
+
+**Acceptance Criteria:**
+- [ ] Can add a new account that only exists in this scenario
+- [ ] Can modify an existing account's properties (growth, value, dates)
+- [ ] Can "remove" an account from the scenario (exclude from forecast)
+- [ ] Modifications don't affect the base case
+- [ ] Added/modified accounts visually indicated as scenario-specific
+
+**Test Case:**
+```
+Given: Base case has no investment property
+When: I create scenario "Buy Investment Property"
+And: Add asset "Investment Property" value $1,000,000 in 2027
+And: Add income "Rental Income" $52,000/year starting 2027
+And: Add expense "Property Costs" 0.5% of property value
+Then: Forecast shows property, rental income, and costs from 2027
+And: Base case remains unchanged
+```
+
+---
+
+#### US-13.5: Add or modify events in a scenario
+**As a** user  
+**I want to** add one-time events or modify existing events within a scenario  
+**So that** I can model specific financial occurrences
+
+**Acceptance Criteria:**
+- [ ] Can add a new event that only exists in this scenario
+- [ ] Can modify an existing event's properties (year, amount, account)
+- [ ] Can remove an event from the scenario
+- [ ] Event modifications don't affect the base case
+
+**Test Case:**
+```
+Given: Base case has downsizer contribution of $300k in 2030
+When: I create scenario "No Downsizer"
+And: Remove the downsizer contribution event
+And: Add event "Keep in Bank" +$300k to Cash in 2030
+Then: Scenario shows $300k going to cash, not super
+And: Base case still has downsizer contribution
+```
+
+---
+
+#### US-13.6: View a scenario's forecast
+**As a** user  
+**I want to** view the forecast for any saved scenario  
+**So that** I can see the projected outcomes of that scenario
+
+**Acceptance Criteria:**
+- [ ] Can switch active scenario from dropdown/selector
+- [ ] Spreadsheet view updates to show scenario's forecast
+- [ ] Charts update to show scenario's projections
+- [ ] Current scenario name displayed prominently
+- [ ] Can switch back to "Base Case" at any time
+- [ ] Overridden values highlighted in spreadsheet
+
+---
+
+#### US-13.7: Compare scenarios on Net Worth chart
+**As a** user  
+**I want to** see multiple scenarios overlaid on a Net Worth chart  
+**So that** I can visually compare different financial trajectories
+
+**Acceptance Criteria:**
+- [ ] Dedicated "Compare Scenarios" page/view
+- [ ] Net Worth over Time chart shows multiple scenario lines
+- [ ] Can select up to 5 scenarios for comparison
+- [ ] Each scenario has distinct color
+- [ ] Legend shows scenario name and description
+- [ ] Base case shown as solid line, alternatives as dashed
+- [ ] Can toggle individual scenarios on/off
+- [ ] Hover shows values for all visible scenarios at that year
+
+**Test Case:**
+```
+Given: I have 3 scenarios: Base, Early Retirement, Market Downturn
+When: I open Compare Scenarios view
+And: Select all 3 scenarios
+Then: Chart shows 3 lines with different colors
+And: Legend identifies each scenario
+And: I can see where trajectories diverge
+```
+
+---
+
+#### US-13.8: Compare scenarios in summary table
+**As a** user  
+**I want to** see key metrics for multiple scenarios in a table  
+**So that** I can quickly compare outcomes numerically
+
+**Acceptance Criteria:**
+- [ ] Summary table shows one column per selected scenario
+- [ ] Rows include key metrics:
+  - Final net worth (at forecast end)
+  - Year assets depleted (if applicable, else "N/A")
+  - Total retirement income (sum of post-retirement income)
+  - Peak net worth and year achieved
+  - Minimum net worth and year (excluding start)
+- [ ] Delta column shows difference from base case
+- [ ] Positive deltas shown in green, negative in red
+- [ ] Can sort by any metric
+
+---
+
+#### US-13.9: Delete a scenario
+**As a** user  
+**I want to** delete a scenario I no longer need  
+**So that** my scenario list stays manageable
+
+**Acceptance Criteria:**
+- [ ] Can delete any scenario except "Base Case"
+- [ ] Confirmation prompt before deletion
+- [ ] Scenario removed from list and comparisons
+- [ ] If currently viewing deleted scenario, switch to Base Case
+
+---
+
+#### US-13.10: Set a scenario as base case
+**As a** user  
+**I want to** promote a scenario to become my new base case  
+**So that** I can adopt a planned change as my primary forecast
+
+**Acceptance Criteria:**
+- [ ] Can promote any scenario to base case
+- [ ] Confirmation prompt explaining the action
+- [ ] Scenario overrides become the new default values
+- [ ] Original base case can optionally be saved as a scenario
+- [ ] All other scenarios now compare against new base
+
+---
+
+#### US-13.11: Monte Carlo simulation bands (Future)
+**As a** user  
+**I want to** see probability bands on my forecast  
+**So that** I understand the range of possible outcomes, not just a single projection
+
+**Acceptance Criteria:**
+- [ ] Can enable Monte Carlo mode for any scenario
+- [ ] Runs N simulations (configurable, default 1000)
+- [ ] Randomizes key assumptions within defined ranges
+- [ ] Chart shows percentile bands (e.g., 10th, 25th, 50th, 75th, 90th)
+- [ ] Can configure which assumptions to randomize
+- [ ] Can set standard deviation/range for each assumption
+- [ ] Summary shows probability of success (e.g., "85% chance of not running out")
+
+**Test Case:**
+```
+Given: Base case with 7% super growth
+When: I enable Monte Carlo with growth varying ±3%
+And: Run 1000 simulations
+Then: Chart shows shaded bands for percentiles
+And: Summary shows "78% chance of maintaining positive net worth to age 99"
+```
 
 ---
 
@@ -628,8 +833,8 @@ And: Warning displayed: "Excess concessional contribution"
 ## Story Map Summary
 
 ```
-                    Phase 1 (MVP)              Phase 2              Phase 3      Phase 4+
-                    ─────────────              ───────              ───────      ────────
+                    Phase 1 (MVP)              Phase 2              Phase 3        Phase 4+
+                    ─────────────              ───────              ───────        ────────
 Accounts            US-1.1 to 1.4              
 Spreadsheet         US-2.1 to 2.5              
 Assumptions         US-3.1 to 3.3              
@@ -641,8 +846,24 @@ Tax Funding         US-9.1, 9.2
 CGT                                            US-10.1 to 10.3
 Tax-Free Income                                US-11.1
 Super Contributions                            US-12.1 to 12.4
-Persistence         US-8.1, 8.2                Sync           
-Scenarios                                      US-P2.1-2.2    
-Multi-Person                                                        US-P3.1-3.2  
-AI Chat                                                                          US-P4.1
+Persistence         US-8.1, 8.2                                                   Cloud Sync
+Scenarios                                      US-13.1 to 13.10   US-13.11 (Monte Carlo)
+Multi-Person                                                       US-P3.1-3.2  
+AI Chat                                                                           US-P4.1
 ```
+
+### Scenario Stories Breakdown
+
+| Story | Title | Priority |
+|-------|-------|----------|
+| US-13.1 | Create a scenario | Must Have |
+| US-13.2 | Edit scenario metadata | Must Have |
+| US-13.3 | Override assumptions in scenario | Must Have |
+| US-13.4 | Add/modify accounts in scenario | Must Have |
+| US-13.5 | Add/modify events in scenario | Must Have |
+| US-13.6 | View scenario forecast | Must Have |
+| US-13.7 | Compare scenarios on chart | Must Have |
+| US-13.8 | Compare scenarios in table | Should Have |
+| US-13.9 | Delete a scenario | Must Have |
+| US-13.10 | Set scenario as base case | Should Have |
+| US-13.11 | Monte Carlo simulation | Future |
