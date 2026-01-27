@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Button, Input, Select } from '../ui';
 import type { Account, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType, AssetSubType, SuperPhase } from '../../schemas/account';
 import type { Settings } from '../../schemas/settings';
@@ -74,10 +74,12 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
 
   const [endBehavior, setEndBehavior] = useState<EndBehavior>(account?.endBehavior ?? 'zero');
   const [transferToAccountId, setTransferToAccountId] = useState(account?.transferToAccountId ?? '');
-  const [depositsToAccountId, setDepositsToAccountId] = useState(account?.depositsToAccountId ?? '');
-  const [fundedByAccountId, setFundedByAccountId] = useState(account?.fundedByAccountId ?? '');
+  // Use default bank account from settings for new accounts
+  const defaultBankAccount = settings?.defaultBankAccountId ?? '';
+  const [depositsToAccountId, setDepositsToAccountId] = useState(account?.depositsToAccountId ?? (account ? '' : defaultBankAccount));
+  const [fundedByAccountId, setFundedByAccountId] = useState(account?.fundedByAccountId ?? (account ? '' : defaultBankAccount));
   const [returnRate, setReturnRate] = useState(account?.returnRate ? (account.returnRate * 100).toString() : '');
-  const [incomeTargetAccountId, setIncomeTargetAccountId] = useState(account?.incomeTargetAccountId ?? '');
+  const [incomeTargetAccountId, setIncomeTargetAccountId] = useState(account?.incomeTargetAccountId ?? (account ? '' : defaultBankAccount));
   const [liquidityType, setLiquidityType] = useState<LiquidityType | ''>(account?.liquidityType ?? '');
 
   // Tax settings
@@ -109,12 +111,55 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
   const [superPhase, setSuperPhase] = useState<SuperPhase>(account?.superConfig?.phase ?? 'accumulation');
   const [preservationYear, setPreservationYear] = useState(account?.superConfig?.preservationYear?.toString() ?? '');
 
+  // Expense-specific settings
+  const [basedOnAccountId, setBasedOnAccountId] = useState(account?.basedOnAccountId ?? '');
+  const [basedOnPercentage, setBasedOnPercentage] = useState(
+    account?.basedOnPercentage !== undefined ? (account.basedOnPercentage * 100).toString() : ''
+  );
+  const [occursEveryYears, setOccursEveryYears] = useState(account?.occursEveryYears?.toString() ?? '');
+
   const otherAccounts = accounts.filter((a) => a.id !== account?.id);
   const assetAccounts = accounts.filter((a) => a.type === 'asset' && a.id !== account?.id);
   const passThroughIncomeAccounts = accounts.filter((a) => a.type === 'income' && a.passThrough && a.id !== account?.id);
 
+  // Validation state
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const errorRef = useRef<HTMLDivElement>(null);
+
+  // Derived validation requirements
+  const requiresDepositsTo = type === 'income';
+  const requiresFundedBy = type === 'expense' || type === 'liability';
+  const requiresIncomeTarget = type === 'asset' && returnRate !== '';
+  const requiresTransferTo = endConditionType !== 'none' && (endBehavior === 'transfer' || endBehavior === 'sell');
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Validate required cash flow accounts
+    const errors: string[] = [];
+    
+    if (requiresDepositsTo && !depositsToAccountId) {
+      errors.push('Income accounts require a "Deposits To" account');
+    }
+    if (requiresFundedBy && !fundedByAccountId) {
+      errors.push(`${type === 'expense' ? 'Expense' : 'Liability'} accounts require a "Funded By" account`);
+    }
+    if (requiresIncomeTarget && !incomeTargetAccountId) {
+      errors.push('Assets with a return rate require a "Generates Income To" account');
+    }
+    if (requiresTransferTo && !transferToAccountId) {
+      errors.push('Accounts with sell or transfer end behavior require a destination account');
+    }
+
+    if (errors.length > 0) {
+      setValidationErrors(errors);
+      // Scroll error message into view
+      setTimeout(() => {
+        errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 0);
+      return;
+    }
+    setValidationErrors([]);
 
     const growthProfile: GrowthProfile = (() => {
       const rate = (parseFloat(growthRate) || 0) / 100;
@@ -205,11 +250,31 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
         phase: superPhase,
         preservationYear: preservationYear ? parseInt(preservationYear) : undefined,
       } : undefined,
+      
+      // Expense-specific settings
+      basedOnAccountId: type === 'expense' && basedOnAccountId ? basedOnAccountId : undefined,
+      basedOnPercentage: type === 'expense' && basedOnAccountId && basedOnPercentage 
+        ? parseFloat(basedOnPercentage) / 100 
+        : undefined,
+      occursEveryYears: type === 'expense' && occursEveryYears 
+        ? parseInt(occursEveryYears) 
+        : undefined,
     });
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      {validationErrors.length > 0 && (
+        <div ref={errorRef} className="bg-red-50 border border-red-200 rounded-lg p-3">
+          <p className="text-sm font-medium text-red-800 mb-1">Please fix the following:</p>
+          <ul className="list-disc list-inside text-sm text-red-700">
+            {validationErrors.map((error, i) => (
+              <li key={i}>{error}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      
       <Input
         label="Account Name"
         value={name}
@@ -281,11 +346,11 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
       {type === 'income' && (
         <>
           <Select
-            label="Deposits To"
+            label="Deposits To *"
             value={depositsToAccountId}
             onChange={(e) => setDepositsToAccountId(e.target.value)}
           >
-            <option value="">None</option>
+            <option value="">Select account...</option>
             {assetAccounts.map((a) => (
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
@@ -316,7 +381,20 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
         </>
       )}
 
-      {(type === 'expense' || type === 'asset') && (
+      {type === 'expense' && (
+        <Select
+          label="Funded By *"
+          value={fundedByAccountId}
+          onChange={(e) => setFundedByAccountId(e.target.value)}
+        >
+          <option value="">Select account...</option>
+          {assetAccounts.map((a) => (
+            <option key={a.id} value={a.id}>{a.name}</option>
+          ))}
+        </Select>
+      )}
+
+      {type === 'asset' && (
         <Select
           label="Funded By"
           value={fundedByAccountId}
@@ -327,6 +405,58 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
             <option key={a.id} value={a.id}>{a.name}</option>
           ))}
         </Select>
+      )}
+
+      {type === 'expense' && (
+        <div className="border-t pt-4">
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Expense Options</h3>
+          
+          <div className="space-y-4">
+            <div>
+              <Select
+                label="Calculate Based On"
+                value={basedOnAccountId}
+                onChange={(e) => setBasedOnAccountId(e.target.value)}
+              >
+                <option value="">Fixed amount (use initial value)</option>
+                {assetAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>% of {a.name}</option>
+                ))}
+              </Select>
+              {basedOnAccountId && (
+                <div className="mt-2">
+                  <Input
+                    label="Percentage (%)"
+                    type="number"
+                    step="0.1"
+                    value={basedOnPercentage}
+                    onChange={(e) => setBasedOnPercentage(e.target.value)}
+                    placeholder="e.g., 0.5 for 0.5%"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Expense will be calculated as this percentage of the selected account's balance each year
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <Input
+                label="Occurs Every X Years"
+                type="number"
+                min="1"
+                value={occursEveryYears}
+                onChange={(e) => setOccursEveryYears(e.target.value)}
+                placeholder="Leave empty for annual"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                {occursEveryYears && parseInt(occursEveryYears) > 1
+                  ? `Expense will occur every ${occursEveryYears} years starting from the account's start year`
+                  : 'Expense occurs every year (default)'}
+              </p>
+            </div>
+          </div>
+        </div>
       )}
 
       {type === 'asset' && (
@@ -439,19 +569,20 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
               placeholder="e.g. 5 for 5%"
             />
             <Select
-              label="Generates Income To"
+              label={returnRate ? "Generates Income To *" : "Generates Income To"}
               value={incomeTargetAccountId}
               onChange={(e) => setIncomeTargetAccountId(e.target.value)}
             >
-              <option value="">None</option>
+              <option value="">{returnRate ? 'Select account...' : 'None'}</option>
               {passThroughIncomeAccounts.map((a) => (
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
             </Select>
           </div>
           <p className="text-xs text-gray-500 mt-2">
-            Only pass-through income accounts can receive investment returns.
-            Create an income account with "Pass-through" enabled (e.g., "Dividend Income") that deposits to your bank account.
+            {returnRate 
+              ? 'Required when return rate is set. Only pass-through income accounts can receive investment returns.'
+              : 'Only pass-through income accounts can receive investment returns. Create an income account with "Pass-through" enabled (e.g., "Dividend Income") that deposits to your bank account.'}
           </p>
         </div>
       )}
@@ -503,11 +634,11 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
           
           <div className="grid grid-cols-2 gap-4 mt-4">
             <Select
-              label="Payments From"
+              label="Payments From *"
               value={fundedByAccountId}
               onChange={(e) => setFundedByAccountId(e.target.value)}
             >
-              <option value="">None</option>
+              <option value="">Select account...</option>
               {assetAccounts.map((a) => (
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
@@ -602,11 +733,11 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
               </Select>
               {(endBehavior === 'transfer' || endBehavior === 'sell') && (
                 <Select
-                  label={endBehavior === 'sell' ? 'Proceeds To' : 'Transfer To'}
+                  label={`${endBehavior === 'sell' ? 'Proceeds To' : 'Transfer To'} *`}
                   value={transferToAccountId}
                   onChange={(e) => setTransferToAccountId(e.target.value)}
                 >
-                  <option value="" disabled>Select account...</option>
+                  <option value="">Select account...</option>
                   {otherAccounts.map((a) => (
                     <option key={a.id} value={a.id}>{a.name}</option>
                   ))}

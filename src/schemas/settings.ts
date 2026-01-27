@@ -51,6 +51,7 @@ export const defaultSuperSettings: SuperSettings = {
 export const SettingsSchema = z.object({
   eventHighlightColor: z.string().default('#bfdbfe'),
   defaultTaxFundingAccountId: z.string().uuid().optional(),
+  defaultBankAccountId: z.string().uuid().optional(), // Default account for income deposits, expense funding, etc.
   growthCalculationMethod: GrowthCalculationMethodSchema.default('openingBalance'),
   super: SuperSettingsSchema.default(defaultSuperSettings),
 });
@@ -59,6 +60,7 @@ export type Settings = z.infer<typeof SettingsSchema>;
 export const defaultSettings: Settings = {
   eventHighlightColor: '#bfdbfe',
   defaultTaxFundingAccountId: undefined,
+  defaultBankAccountId: undefined,
   growthCalculationMethod: 'openingBalance',
   super: defaultSuperSettings,
 };

@@ -96,6 +96,11 @@ export const AccountSchema = z.object({
   // Income-specific fields
   passThrough: z.boolean().optional(), // If true, balance doesn't carry forward (e.g., dividends)
   
+  // Expense-specific fields
+  basedOnAccountId: z.string().uuid().optional(), // Calculate expense as % of this account's balance
+  basedOnPercentage: z.number().optional(), // Percentage of reference account (0.005 = 0.5%)
+  occursEveryYears: z.number().int().positive().optional(), // Expense only incurs every X years
+  
   // Liability-specific fields
   interestRate: z.number().optional(), // Annual interest rate as decimal (0.065 for 6.5%)
   paymentType: LiabilityPaymentTypeSchema.optional(),

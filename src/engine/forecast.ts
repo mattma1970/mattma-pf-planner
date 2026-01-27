@@ -39,6 +39,63 @@ interface PendingCgtEvent {
   fundedFromAccountName: string;
 }
 
+/**
+ * Check if a periodic expense should occur in a given year.
+ * Returns true if: (year - startYear) is divisible by occursEveryYears
+ */
+function isPeriodicExpenseYear(
+  year: number,
+  startYear: number,
+  occursEveryYears: number
+): boolean {
+  const yearsSinceStart = year - startYear;
+  return yearsSinceStart >= 0 && yearsSinceStart % occursEveryYears === 0;
+}
+
+/**
+ * Calculate expense value for an account, handling balance-based and periodic expenses.
+ * Returns the expense amount for this year (may be 0 for periodic expenses in off-years).
+ */
+function calculateExpenseValue(
+  account: Account,
+  year: number,
+  baseValue: number,
+  openingValues: Map<string, number>,
+  accountStartYear: number,
+  accounts: Account[],
+  persons: Person[]
+): { value: number; isPeriodicOffYear: boolean; basedOnValue?: number } {
+  // Check if this is a periodic expense and if we're in an "off" year
+  if (account.occursEveryYears) {
+    if (!isPeriodicExpenseYear(year, accountStartYear, account.occursEveryYears)) {
+      return { value: 0, isPeriodicOffYear: true };
+    }
+  }
+
+  // Calculate the expense value
+  let value = baseValue;
+  let basedOnValue: number | undefined;
+
+  // If balance-based, calculate from reference account's opening value
+  if (account.basedOnAccountId && account.basedOnPercentage !== undefined) {
+    const refAccount = accounts.find(a => a.id === account.basedOnAccountId);
+    if (refAccount) {
+      // Check if the reference account is active in this year
+      const refAccountActive = isAccountActive(refAccount, year, persons);
+      if (!refAccountActive) {
+        // Reference account hasn't started yet or has ended - expense is 0
+        return { value: 0, isPeriodicOffYear: false, basedOnValue: 0 };
+      }
+      
+      // Get the reference account's opening value for this year (captured at start of year)
+      basedOnValue = openingValues.get(account.basedOnAccountId) ?? refAccount.initialValue;
+      value = basedOnValue * account.basedOnPercentage;
+    }
+  }
+
+  return { value, isPeriodicOffYear: false, basedOnValue };
+}
+
 export interface ForecastInput {
   accounts: Account[];
   assumptions: Assumptions;
@@ -95,6 +152,19 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     // ===========================================
     // PHASE 1: Calculate opening balances and identify lifecycle transfers
     // ===========================================
+    
+    // Capture opening values for all accounts at the start of the year
+    // This is used for balance-based expense calculations
+    const openingValues = new Map<string, number>();
+    for (const account of accounts) {
+      const isFirstActiveYear = !accountStartYears.has(account.id) && isAccountActive(account, year, persons);
+      const opening = isFirstActiveYear
+        ? account.initialValue
+        : (account.type === 'income' && account.passThrough)
+          ? 0
+          : (accountValues.get(account.id) ?? account.initialValue);
+      openingValues.set(account.id, opening);
+    }
     
     // First pass: determine which accounts are ending and their transfer amounts
     const lifecycleTransfers: { 
@@ -345,6 +415,55 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           // Interest will be calculated in the liability processing phase
           projectedValue = openingValue + lifecycleChange + userTransferChange;
           growth = 0;
+        } else if (account.type === 'expense') {
+          // Special handling for expense accounts with balance-based or periodic features
+          const accountStartYear = accountStartYears.get(account.id) ?? year;
+          const yearsSinceStart = year - accountStartYear + 1;
+          
+          // For periodic expenses, we need to calculate the "notional" value with growth
+          // even in off-years, so the expense value is correct when it does occur.
+          // Use the account's initial value as the base, grown by yearsSinceStart years.
+          let grownBaseValue: number;
+          if (account.occursEveryYears) {
+            // For periodic expenses, always grow from initial value
+            // This ensures the expense amount is correct regardless of off-years
+            const epochGrowthOverride = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'growthRate');
+            grownBaseValue = projectAccountValue(account, year, account.initialValue, resolvedAssumptions, yearsSinceStart, epochGrowthOverride);
+            // Compound for all years since start
+            for (let y = 1; y < yearsSinceStart; y++) {
+              grownBaseValue = projectAccountValue(account, year, grownBaseValue, resolvedAssumptions, y + 1, epochGrowthOverride);
+            }
+            // Recalculate properly: initial * (1 + rate)^yearsSinceStart
+            const epochGrowth = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'growthRate');
+            // Use simpler compound growth
+            let rate = 0;
+            if (account.growthProfile.type === 'fixed') {
+              rate = epochGrowth ?? account.growthProfile.rate;
+            } else if (account.growthProfile.type === 'cpiLinked') {
+              const cpiValue = epochGrowth ?? account.growthProfile.value ?? 0;
+              rate = resolvedAssumptions.cpi + cpiValue;
+            }
+            grownBaseValue = account.initialValue * Math.pow(1 + rate, yearsSinceStart - 1);
+          } else if (balanceForGrowth > 0) {
+            const epochGrowthOverride = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'growthRate');
+            grownBaseValue = projectAccountValue(account, year, balanceForGrowth, resolvedAssumptions, yearsSinceStart, epochGrowthOverride);
+          } else {
+            grownBaseValue = balanceForGrowth;
+          }
+          
+          // Then apply expense-specific calculations (balance-based, periodic)
+          const expenseResult = calculateExpenseValue(
+            account,
+            year,
+            grownBaseValue,
+            openingValues,
+            accountStartYear,
+            accounts,
+            persons
+          );
+          
+          projectedValue = expenseResult.value;
+          growth = projectedValue - openingValue;
         } else if (balanceForGrowth > 0) {
           const yearsSinceStart = year - (accountStartYears.get(account.id) ?? year) + 1;
           const epochGrowthOverride = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'growthRate');

@@ -74,9 +74,22 @@ Rather than hardcoding specific income sources, assets, or liabilities, the syst
 - Epoch behavior (carries forward, liquidates, transfers, sells with CGT)
 - Auto top-up (for assets: automatically transfer from another account when balance falls below threshold)
 
+**Expense-Specific Features:**
+
+| Feature | Description | Use Case |
+|---------|-------------|----------|
+| **Balance-based calculation** | Expense = X% of another account's balance | Property maintenance at 0.5% of house value |
+| **Periodic occurrence** | Expense occurs every X years | Vehicle replacement every 7 years |
+
+*Balance-based expenses* automatically recalculate each year based on the reference account's current balance. This is ideal for costs that scale with asset values (insurance, maintenance, running costs).
+
+*Periodic expenses* only incur in years matching the interval (e.g., every 5 years starting from the account's start year). This models infrequent but predictable costs without creating separate events.
+
+Both features can be combined: "Roof replacement = 5% of house value, every 15 years".
+
 This allows:
 - A simple user to configure: "Salary", "House", "Super", "Living Costs"
-- A complex user to configure: Multiple income streams, investment accounts, rental properties, etc.
+- A complex user to configure: Multiple income streams, investment accounts, rental properties with scaled maintenance costs, periodic vehicle replacements, etc.
 
 ### 2.5 Year-Level Visibility (Spreadsheet View)
 

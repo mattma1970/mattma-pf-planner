@@ -73,6 +73,66 @@
 
 ---
 
+#### US-1.5: Create balance-based expense
+**As a** user  
+**I want to** define an expense as a percentage of another account's balance  
+**So that** I can model costs that scale with asset values (e.g., property maintenance)
+
+**Acceptance Criteria:**
+- [ ] Can select "Based on account balance" calculation method for expense accounts
+- [ ] Can select which asset account the expense is based on
+- [ ] Can specify the percentage (e.g., 0.5% of property value)
+- [ ] Expense amount recalculates each year based on the reference account's balance
+- [ ] Growth profile still applies (for additional inflation adjustments if needed)
+- [ ] Works correctly when reference account has start/end conditions
+
+**Examples:**
+- Property maintenance: 0.5% of "Investment Property" value per year
+- Vehicle running costs: 2% of "Car" value per year
+- Insurance (property): 0.3% of "House" value per year
+
+**Test Case:**
+```
+Given: Asset "House" with value $1,000,000, growing at 5%
+And: Expense "Maintenance" = 0.5% of "House" balance
+When: Year 1 forecast calculated
+Then: Maintenance expense = $5,000 (0.5% of $1M)
+When: Year 2 forecast calculated (house now $1,050,000)
+Then: Maintenance expense = $5,250 (0.5% of $1.05M)
+```
+
+---
+
+#### US-1.6: Create periodic expense
+**As a** user  
+**I want to** define an expense that occurs every X years  
+**So that** I can model infrequent recurring costs (e.g., vehicle replacement, major repairs)
+
+**Acceptance Criteria:**
+- [ ] Can specify "Occurs every X years" for expense accounts
+- [ ] Expense amount appears only in years that match the interval
+- [ ] First occurrence is the start year (or first active year)
+- [ ] Can combine with balance-based calculation
+- [ ] Growth profile applies to adjust the amount over time
+- [ ] Clearly indicated in spreadsheet which years have the expense
+
+**Examples:**
+- Vehicle replacement: $50,000 every 7 years
+- Full medical checkup: $2,000 every 2 years
+- Roof replacement: 5% of house value every 15 years
+
+**Test Case:**
+```
+Given: Expense "Vehicle Replacement" = $50,000 every 5 years
+And: Starts in 2025, CPI-indexed growth
+When: Forecast calculated for 2025-2040
+Then: Expense appears in: 2025, 2030, 2035, 2040
+And: 2025 = $50,000, 2030 = ~$57,963 (with 3% CPI), etc.
+And: Years 2026-2029, 2031-2034, 2036-2039 show $0
+```
+
+---
+
 ### Epic 2: Spreadsheet View
 
 #### US-2.1: View forecast as spreadsheet

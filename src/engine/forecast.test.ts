@@ -1602,4 +1602,218 @@ describe('calculateForecast', () => {
       expect(nonConcCap.closing).toBe(120000);
     });
   });
+
+  describe('balance-based expenses', () => {
+    it('calculates expense as percentage of asset balance', () => {
+      const houseAccount: Account = {
+        id: 'house-1111-1111-1111-111111111111',
+        name: 'House',
+        type: 'asset',
+        initialValue: 1000000,
+        growthProfile: { type: 'fixed', rate: 0.05 }, // 5% growth
+      };
+
+      const maintenanceAccount: Account = {
+        id: 'maint-1111-1111-1111-111111111111',
+        name: 'Maintenance',
+        type: 'expense',
+        initialValue: 0, // Will be calculated from house value
+        growthProfile: { type: 'fixed', rate: 0 },
+        basedOnAccountId: houseAccount.id,
+        basedOnPercentage: 0.005, // 0.5% of house value
+      };
+
+      const result = calculateForecast({
+        accounts: [houseAccount, maintenanceAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      // Year 1: House = $1M, Maintenance = 0.5% of $1M = $5,000
+      const year2025 = result.years[0];
+      const maint2025 = year2025.accounts.find(a => a.accountId === maintenanceAccount.id)!;
+      expect(maint2025.endValue).toBe(5000);
+
+      // Year 2: House grew to $1.05M, Maintenance = 0.5% of $1.05M = $5,250
+      const year2026 = result.years[1];
+      const maint2026 = year2026.accounts.find(a => a.accountId === maintenanceAccount.id)!;
+      expect(maint2026.endValue).toBe(5250);
+
+      // Year 3: House grew to $1.1025M, Maintenance = 0.5% of $1.1025M = $5,512.50
+      const year2027 = result.years[2];
+      const maint2027 = year2027.accounts.find(a => a.accountId === maintenanceAccount.id)!;
+      expect(maint2027.endValue).toBeCloseTo(5512.5, 1);
+    });
+  });
+
+  describe('periodic expenses', () => {
+    it('only incurs expense every X years', () => {
+      const vehicleReplacement: Account = {
+        id: 'vehicle-1111-1111-1111-111111111111',
+        name: 'Vehicle Replacement',
+        type: 'expense',
+        initialValue: 50000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        occursEveryYears: 3, // Every 3 years
+      };
+
+      const result = calculateForecast({
+        accounts: [vehicleReplacement],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2031,
+      });
+
+      // Should occur in 2025 (year 0), 2028 (year 3), 2031 (year 6)
+      const getExpense = (yr: number) => 
+        result.years.find(y => y.year === yr)?.accounts.find(a => a.accountId === vehicleReplacement.id)?.endValue ?? 0;
+
+      expect(getExpense(2025)).toBe(50000); // Year 0 - occurs
+      expect(getExpense(2026)).toBe(0);     // Year 1 - off year
+      expect(getExpense(2027)).toBe(0);     // Year 2 - off year
+      expect(getExpense(2028)).toBe(50000); // Year 3 - occurs
+      expect(getExpense(2029)).toBe(0);     // Year 4 - off year
+      expect(getExpense(2030)).toBe(0);     // Year 5 - off year
+      expect(getExpense(2031)).toBe(50000); // Year 6 - occurs
+    });
+
+    it('applies growth to periodic expenses', () => {
+      const medicalCheckup: Account = {
+        id: 'medical-1111-1111-1111-111111111111',
+        name: 'Medical Checkup',
+        type: 'expense',
+        initialValue: 2000,
+        growthProfile: { type: 'cpiLinked', operation: 'add', value: 0 }, // CPI (3%)
+        occursEveryYears: 2, // Every 2 years
+      };
+
+      const result = calculateForecast({
+        accounts: [medicalCheckup],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2029,
+      });
+
+      const getExpense = (yr: number) => 
+        result.years.find(y => y.year === yr)?.accounts.find(a => a.accountId === medicalCheckup.id)?.endValue ?? 0;
+
+      // Year 0 (2025): $2,000
+      expect(getExpense(2025)).toBeCloseTo(2000, 0);
+      // Year 1 (2026): off year
+      expect(getExpense(2026)).toBe(0);
+      // Year 2 (2027): $2,000 * 1.03^2 = $2,121.80, occurs
+      expect(getExpense(2027)).toBeCloseTo(2121.8, 0);
+      // Year 3 (2028): off year
+      expect(getExpense(2028)).toBe(0);
+      // Year 4 (2029): $2,000 * 1.03^4 = $2,251.02, occurs
+      expect(getExpense(2029)).toBeCloseTo(2251.02, 0);
+    });
+
+    it('combines balance-based and periodic expense', () => {
+      const houseAccount: Account = {
+        id: 'house-2222-2222-2222-222222222222',
+        name: 'House',
+        type: 'asset',
+        initialValue: 800000,
+        growthProfile: { type: 'fixed', rate: 0.04 }, // 4% growth
+      };
+
+      const roofReplacement: Account = {
+        id: 'roof-1111-1111-1111-111111111111',
+        name: 'Roof Replacement',
+        type: 'expense',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        basedOnAccountId: houseAccount.id,
+        basedOnPercentage: 0.03, // 3% of house value
+        occursEveryYears: 5, // Every 5 years
+      };
+
+      const result = calculateForecast({
+        accounts: [houseAccount, roofReplacement],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2035,
+      });
+
+      const getExpense = (yr: number) => 
+        result.years.find(y => y.year === yr)?.accounts.find(a => a.accountId === roofReplacement.id)?.endValue ?? 0;
+
+      // Year 0 (2025): 3% of $800k = $24,000, occurs
+      expect(getExpense(2025)).toBe(24000);
+      // Year 1-4: off years
+      expect(getExpense(2026)).toBe(0);
+      expect(getExpense(2027)).toBe(0);
+      expect(getExpense(2028)).toBe(0);
+      expect(getExpense(2029)).toBe(0);
+      // Year 5 (2030): House = $800k * 1.04^5 = $973,316.89, Roof = 3% = $29,199.51
+      expect(getExpense(2030)).toBeCloseTo(29199.51, 0);
+    });
+
+    it('returns zero expense when reference account has not started yet', () => {
+      const investmentProperty: Account = {
+        id: 'prop-1111-1111-1111-111111111111',
+        name: 'Investment Property',
+        type: 'asset',
+        initialValue: 1000000,
+        growthProfile: { type: 'fixed', rate: 0.04 },
+        startCondition: { type: 'year', year: 2028 }, // Starts in 2028
+      };
+
+      const propertyMaintenance: Account = {
+        id: 'propmaint-1111-1111-1111-111111111111',
+        name: 'Property Maintenance',
+        type: 'expense',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        basedOnAccountId: investmentProperty.id,
+        basedOnPercentage: 0.01, // 1% of property value
+      };
+
+      const result = calculateForecast({
+        accounts: [investmentProperty, propertyMaintenance],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2030,
+      });
+
+      const getExpense = (yr: number) => 
+        result.years.find(y => y.year === yr)?.accounts.find(a => a.accountId === propertyMaintenance.id)?.endValue ?? 0;
+
+      // Before property starts: expense should be 0
+      expect(getExpense(2025)).toBe(0);
+      expect(getExpense(2026)).toBe(0);
+      expect(getExpense(2027)).toBe(0);
+      
+      // Property starts in 2028 with $1M value: expense = 1% = $10,000
+      expect(getExpense(2028)).toBe(10000);
+      
+      // Property grows to $1.04M in 2029: expense = 1% = $10,400
+      expect(getExpense(2029)).toBe(10400);
+      
+      // Property grows to $1.0816M in 2030: expense = 1% = $10,816
+      expect(getExpense(2030)).toBeCloseTo(10816, 0);
+    });
+  });
 });
