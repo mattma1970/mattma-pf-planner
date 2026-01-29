@@ -94,7 +94,8 @@ export const AccountSchema = z.object({
   autoTopup: AutoTopupSchema.optional(),
   
   // Income-specific fields
-  passThrough: z.boolean().optional(), // If true, balance doesn't carry forward (e.g., dividends)
+  // Note: All income/expense accounts are implicitly "pass-through" - opening balance is always 0
+  // Growth is calculated based on prior year's inflows, not carried-forward balance
   
   // Expense-specific fields
   basedOnAccountId: z.string().uuid().optional(), // Calculate expense as % of this account's balance

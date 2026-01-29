@@ -123,9 +123,17 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
   const years: YearResult[] = [];
   const accountValues: Map<string, number> = new Map();
   const accountStartYears: Map<string, number> = new Map();
+  
+  // Track prior year inflows for income/expense accounts
+  // Income/expense accounts always have opening balance = 0, but growth is based on prior year's inflows
+  const priorYearInflows: Map<string, number> = new Map();
 
   accounts.forEach((account) => {
     accountValues.set(account.id, account.initialValue);
+    // Initialize prior year inflows to initialValue for income/expense accounts
+    if (account.type === 'income' || account.type === 'expense') {
+      priorYearInflows.set(account.id, account.initialValue);
+    }
   });
 
   let peakAssets = 0;
@@ -155,12 +163,13 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     
     // Capture opening values for all accounts at the start of the year
     // This is used for balance-based expense calculations
+    // Income/expense accounts always start at 0 (they don't carry forward balances)
     const openingValues = new Map<string, number>();
     for (const account of accounts) {
       const isFirstActiveYear = !accountStartYears.has(account.id) && isAccountActive(account, year, persons);
       const opening = isFirstActiveYear
         ? account.initialValue
-        : (account.type === 'income' && account.passThrough)
+        : (account.type === 'income' || account.type === 'expense')
           ? 0
           : (accountValues.get(account.id) ?? account.initialValue);
       openingValues.set(account.id, opening);
@@ -183,12 +192,11 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         accountStartYears.set(account.id, year);
       }
 
-      // Pass-through income accounts start from 0 each year (only show contributions)
-      // Regular income accounts carry forward with growth
+      // Income/expense accounts start from 0 each year (they don't carry forward balances)
       // Other accounts carry forward their balance
       const openingValue = isFirstActiveYear
         ? account.initialValue
-        : (account.type === 'income' && account.passThrough)
+        : (account.type === 'income' || account.type === 'expense')
           ? 0
           : (accountValues.get(account.id) ?? account.initialValue);
 
@@ -464,6 +472,25 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           
           projectedValue = expenseResult.value;
           growth = projectedValue - openingValue;
+        } else if (account.type === 'income') {
+          // Income accounts: growth is based on prior year's inflows, not opening balance
+          // This makes growth intuitive: if salary was $100k last year with 3% growth, this year it's $103k
+          if (isFirstActiveYear) {
+            // First active year: use initialValue directly (no growth yet)
+            projectedValue = account.initialValue;
+            growth = 0;
+          } else {
+            const priorInflows = priorYearInflows.get(account.id) ?? account.initialValue;
+            if (priorInflows > 0) {
+              const yearsSinceStart = year - (accountStartYears.get(account.id) ?? year) + 1;
+              const epochGrowthOverride = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'growthRate');
+              projectedValue = projectAccountValue(account, year, priorInflows, resolvedAssumptions, yearsSinceStart, epochGrowthOverride);
+              growth = projectedValue - priorInflows;
+            } else {
+              projectedValue = 0;
+              growth = 0;
+            }
+          }
         } else if (balanceForGrowth > 0) {
           const yearsSinceStart = year - (accountStartYears.get(account.id) ?? year) + 1;
           const epochGrowthOverride = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'growthRate');
@@ -504,10 +531,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
 
         // PHASE 5: Derived flows
         if (account.type === 'income' && account.depositsToAccountId) {
-          // Pass-through: deposit only contributions; Regular: deposit projectedValue + contributions
-          const totalIncomeToDeposit = account.passThrough
-            ? contributions
-            : projectedValue + contributions;
+          // All income accounts deposit projectedValue + contributions
+          const totalIncomeToDeposit = projectedValue + contributions;
           if (totalIncomeToDeposit > 0) {
             derivedFlows.push({ accountId: account.depositsToAccountId, amount: totalIncomeToDeposit, type: 'contribution', description: `Income: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
           }
@@ -565,11 +590,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       accountValues.set(account.id, endValue);
 
       if (account.type === 'income') {
-        // For pass-through accounts, taxable income is just contributions received
-        // For regular income accounts, it's projectedValue + contributions
-        const taxableIncome = account.passThrough
-          ? contributions
-          : projectedValue + contributions;
+        // All income accounts: taxable income is projectedValue + contributions
+        const taxableIncome = projectedValue + contributions;
         totalIncome += taxableIncome;
         // Track income per account for itemized tax events (skip tax-free income)
         if (taxableIncome > 0 && account.incomeTaxTreatment !== 'taxFree') {
@@ -580,12 +602,14 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             fundedFromAccountId: account.taxFundedFromAccountId,
           });
         }
-        // For pass-through: show contributions only, for regular: show full taxable income
-        if (account.passThrough) {
-          endValue = contributions;
-        }
+        // Income accounts show total income for the year as endValue
+        endValue = taxableIncome;
+        // Track inflows for next year's growth calculation
+        priorYearInflows.set(account.id, taxableIncome);
       } else if (account.type === 'expense') {
         totalExpenses += projectedValue;
+        // Track expense value for next year's growth calculation
+        priorYearInflows.set(account.id, projectedValue);
       }
 
       accountResults.set(account.id, {

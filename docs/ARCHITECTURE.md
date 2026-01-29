@@ -279,6 +279,16 @@ type GrowthProfile =
   | { type: 'decreasing'; ratePerYear: number };
 ```
 
+#### Account Type Behaviors
+
+**Assets & Liabilities**: Balances carry forward year-over-year. Growth is applied to the opening balance.
+
+**Income & Expenses**: Opening balance is always zero each year (no balance carry-forward). Growth is calculated based on the prior year's inflows:
+- Year 1: Uses `initialValue` directly
+- Year 2+: Applies growth rate to the prior year's total inflows
+
+This design reflects the intuitive understanding that income/expenses are periodic flows, not accumulating balances. For example, a $100k salary with 3% growth becomes $103k the next year.
+
 ### Assumptions
 
 ```typescript
