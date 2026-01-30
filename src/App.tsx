@@ -10,12 +10,24 @@ import type { Event } from './schemas/event';
 import type { Epoch } from './schemas/epoch';
 import type { Assumptions } from './schemas/assumption';
 import { defaultSourceConfigs, type SuperContributionSourceConfig } from './schemas/settings';
+import type { PersonColor } from './schemas/person';
+
+const personColorOptions: { value: PersonColor; bgClass: string }[] = [
+  { value: 'indigo', bgClass: 'bg-indigo-500' },
+  { value: 'blue', bgClass: 'bg-blue-500' },
+  { value: 'emerald', bgClass: 'bg-emerald-500' },
+  { value: 'amber', bgClass: 'bg-amber-500' },
+  { value: 'rose', bgClass: 'bg-rose-500' },
+  { value: 'purple', bgClass: 'bg-purple-500' },
+  { value: 'cyan', bgClass: 'bg-cyan-500' },
+  { value: 'orange', bgClass: 'bg-orange-500' },
+];
 
 function App() {
   const { accounts, create: createAccount, update: updateAccount, reorder: reorderAccounts } = useAccounts();
   const { events, create: createEvent, update: updateEvent, remove: removeEvent } = useEvents();
   const { epochs, create: createEpoch, update: updateEpoch, remove: removeEpoch, refresh: refreshEpochs } = useEpochs();
-  const { persons } = usePersons();
+  const { persons, create: createPerson, update: updatePerson, remove: removePerson } = usePersons();
   const { assumptions, update: updateAssumptions } = useAssumptions();
   const { settings, updateSettings } = useSettings();
 
@@ -30,6 +42,9 @@ function App() {
   const [showEvents, setShowEvents] = useState(false);
   const [showEventHighlights, setShowEventHighlights] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [editingPersonId, setEditingPersonId] = useState<string | null>(null);
+  const [newPersonName, setNewPersonName] = useState('');
+  const [newPersonBirthYear, setNewPersonBirthYear] = useState('');
 
   useEffect(() => {
     refreshForecast();
@@ -162,6 +177,7 @@ function App() {
         onClose={() => setAccountModalOpen(false)}
         account={editingAccount as unknown as Account | undefined}
         accounts={accounts as unknown as Account[]}
+        persons={persons}
         settings={settings}
         onSubmit={handleSaveAccount as (data: Omit<Account, 'id'>) => void}
       />
@@ -220,7 +236,127 @@ function App() {
       />
       <Modal isOpen={showSettings} onClose={() => setShowSettings(false)} title="Settings" size="lg">
         <div className="space-y-6">
+          {/* People Section */}
           <div>
+            <h3 className="text-sm font-semibold text-blue-800 mb-4">People</h3>
+            <div className="space-y-2">
+              {persons.map((person) => (
+                <div key={person.id} className="flex items-center gap-3 p-2 bg-gray-50 rounded">
+                  {editingPersonId === person.id ? (
+                    <div className="flex items-center gap-3 flex-1" data-person-edit>
+                      <div className="flex gap-1">
+                        {personColorOptions.map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => updatePerson(person.id, { color: opt.value })}
+                            className={`w-5 h-5 rounded-full ${opt.bgClass} ${
+                              person.color === opt.value ? 'ring-2 ring-offset-1 ring-gray-400' : ''
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      <input
+                        type="text"
+                        defaultValue={person.name}
+                        className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm"
+                        onBlur={(e) => {
+                          const relatedTarget = e.relatedTarget as HTMLElement | null;
+                          const isClickingWithinEditArea = relatedTarget?.closest('[data-person-edit]');
+                          if (!isClickingWithinEditArea) {
+                            updatePerson(person.id, { name: e.target.value });
+                            setEditingPersonId(null);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            updatePerson(person.id, { name: (e.target as HTMLInputElement).value });
+                            setEditingPersonId(null);
+                          }
+                        }}
+                        autoFocus
+                      />
+                      <input
+                        type="number"
+                        defaultValue={person.birthYear}
+                        className="w-20 px-2 py-1 border border-gray-300 rounded text-sm"
+                        placeholder="Birth Year"
+                        onBlur={(e) => {
+                          updatePerson(person.id, { birthYear: parseInt(e.target.value) || person.birthYear });
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setEditingPersonId(null)}
+                        className="text-blue-600 hover:text-blue-800 text-xs"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <span className={`w-3 h-3 rounded-full ${personColorOptions.find(o => o.value === person.color)?.bgClass ?? 'bg-indigo-500'}`} />
+                      <span className="flex-1 text-sm">{person.name}</span>
+                      <span className="text-xs text-gray-500">Born {person.birthYear}</span>
+                      <button
+                        onClick={() => setEditingPersonId(person.id)}
+                        className="text-blue-600 hover:text-blue-800 text-xs"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (confirm(`Delete ${person.name}?`)) {
+                            removePerson(person.id);
+                          }
+                        }}
+                        className="text-red-600 hover:text-red-800 text-xs"
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+              {persons.length === 0 && (
+                <p className="text-sm text-gray-500 italic">No people configured. Add a person to track individual tax and super.</p>
+              )}
+            </div>
+            <div className="mt-3 flex gap-2">
+              <input
+                type="text"
+                value={newPersonName}
+                onChange={(e) => setNewPersonName(e.target.value)}
+                placeholder="Name"
+                className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm"
+              />
+              <input
+                type="number"
+                value={newPersonBirthYear}
+                onChange={(e) => setNewPersonBirthYear(e.target.value)}
+                placeholder="Birth Year"
+                className="w-24 px-2 py-1 border border-gray-300 rounded text-sm"
+              />
+              <button
+                onClick={() => {
+                  if (newPersonName && newPersonBirthYear) {
+                    createPerson({ name: newPersonName, birthYear: parseInt(newPersonBirthYear) });
+                    setNewPersonName('');
+                    setNewPersonBirthYear('');
+                  }
+                }}
+                disabled={!newPersonName || !newPersonBirthYear}
+                className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Add
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              People are used to track account ownership, super contribution caps, and tax obligations.
+            </p>
+          </div>
+
+          <div className="border-t pt-6">
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Default Tax Funding Account
             </label>
@@ -293,6 +429,28 @@ function App() {
                 className="h-10 w-20 rounded border border-gray-300 cursor-pointer"
               />
               <span className="text-sm text-gray-500">{settings.eventHighlightColor}</span>
+            </div>
+          </div>
+
+          {/* Tax Settings */}
+          <div className="border-t pt-6">
+            <h3 className="text-sm font-semibold text-green-800 mb-4">Tax Settings</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Company Tax Rate (%)
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={(settings.companyTaxRate ?? 0.30) * 100}
+                  onChange={(e) => updateSettings({ companyTaxRate: (parseFloat(e.target.value) || 30) / 100 })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Used to calculate franking credits on dividend income (default 30% for Australian companies)
+                </p>
+              </div>
             </div>
           </div>
 

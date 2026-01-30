@@ -1,6 +1,7 @@
 import { Modal } from '../ui';
 import { AccountForm } from './AccountForm';
 import type { Account } from '../../schemas/account';
+import type { Person } from '../../schemas/person';
 import type { Settings } from '../../schemas/settings';
 
 interface AccountModalProps {
@@ -8,11 +9,12 @@ interface AccountModalProps {
   onClose: () => void;
   account?: Account;
   accounts: Account[];
+  persons: Person[];
   settings?: Settings;
   onSubmit: (data: Omit<Account, 'id'>) => void;
 }
 
-export function AccountModal({ isOpen, onClose, account, accounts, settings, onSubmit }: AccountModalProps) {
+export function AccountModal({ isOpen, onClose, account, accounts, persons, settings, onSubmit }: AccountModalProps) {
   const title = account ? 'Edit Account' : 'Add Account';
 
   const handleSubmit = (data: Omit<Account, 'id'>) => {
@@ -25,6 +27,7 @@ export function AccountModal({ isOpen, onClose, account, accounts, settings, onS
       <AccountForm
         account={account}
         accounts={accounts}
+        persons={persons}
         settings={settings}
         onSubmit={handleSubmit}
         onCancel={onClose}

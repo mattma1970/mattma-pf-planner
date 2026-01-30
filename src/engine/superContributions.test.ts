@@ -285,7 +285,7 @@ describe('getContributionsForYear', () => {
       },
     ];
 
-    const result = getContributionsForYear(events, 2025);
+    const result = getContributionsForYear(events, 2025, []);
 
     expect(result).toHaveLength(2);
     expect(result[0].amount).toBe(10000);
@@ -294,7 +294,7 @@ describe('getContributionsForYear', () => {
 
   it('returns empty array when no matching events', () => {
     const events: Event[] = [];
-    const result = getContributionsForYear(events, 2025);
+    const result = getContributionsForYear(events, 2025, []);
     expect(result).toEqual([]);
   });
 });
@@ -351,7 +351,7 @@ describe('aggregateContributionsByPerson', () => {
       },
     ];
 
-    const result = aggregateContributionsByPerson(events, 2025, persons);
+    const result = aggregateContributionsByPerson(events, 2025, persons, []);
 
     expect(result.get('p1')).toEqual({
       concessional: 25000,
@@ -610,7 +610,7 @@ describe('exemptFromCap contributions', () => {
       },
     ];
     
-    const result = aggregateContributionsByPerson(events, 2025, persons);
+    const result = aggregateContributionsByPerson(events, 2025, persons, []);
     
     // Only the $50k non-exempt should be counted
     expect(result.get('p1')?.nonConcessional).toBe(50000);
@@ -634,7 +634,7 @@ describe('exemptFromCap contributions', () => {
       },
     ];
     
-    const result = aggregateContributionsByPerson(events, 2025, persons);
+    const result = aggregateContributionsByPerson(events, 2025, persons, []);
     
     // Income reduction is tracked even for exempt
     expect(result.get('p1')?.incomeReduction).toBe(20000);

@@ -78,6 +78,7 @@ export const TaxEventTypeSchema = z.enum([
   'superContributionTax',
   'taxDeduction',
   'division293Tax',
+  'frankingCreditOffset',
 ]);
 export type TaxEventType = z.infer<typeof TaxEventTypeSchema>;
 
@@ -86,6 +87,7 @@ export type TaxEventType = z.infer<typeof TaxEventTypeSchema>;
 // Note: CGT is handled via account endBehavior: 'sell', not via events
 export const EventTaxTreatmentTypeSchema = z.enum([
   'none',
+  'taxable',
   'taxDeduction',
 ]);
 export type EventTaxTreatmentType = z.infer<typeof EventTaxTreatmentTypeSchema>;
@@ -103,6 +105,8 @@ export const TaxEventSchema = z.object({
   assessableAmount: z.number(),
   fundedFromAccountId: z.string(),
   fundedFromAccountName: z.string().optional(),
+  personId: z.string().optional(),
+  personName: z.string().optional(),
   
   // CGT-specific fields
   grossCapitalGain: z.number().optional(),
@@ -120,6 +124,14 @@ export const TaxAggregationSchema = z.object({
   calculatedTax: z.number(),
 });
 export type TaxAggregation = z.infer<typeof TaxAggregationSchema>;
+
+export const TaxByPersonSchema = z.object({
+  personId: z.string(),
+  personName: z.string(),
+  totalAssessable: z.number(),
+  calculatedTax: z.number(),
+});
+export type TaxByPerson = z.infer<typeof TaxByPersonSchema>;
 
 export const TaxEventsByYearSchema = z.record(z.string(), z.array(TaxEventSchema));
 export type TaxEventsByYear = z.infer<typeof TaxEventsByYearSchema>;

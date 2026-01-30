@@ -39,6 +39,7 @@ export function EventForm({ event, accounts, persons, forecast, settings, onSubm
   // Tax settings
   const [taxTreatmentType, setTaxTreatmentType] = useState<EventTaxTreatmentType | ''>(event?.taxTreatmentType ?? '');
   const [taxFundedFromAccountId, setTaxFundedFromAccountId] = useState(event?.taxFundedFromAccountId ?? '');
+  const [personId, setPersonId] = useState(event?.personId ?? '');
   
   // Super contribution settings
   const [superContributionType, setSuperContributionType] = useState<SuperContributionType>(
@@ -132,6 +133,7 @@ export function EventForm({ event, accounts, persons, forecast, settings, onSubm
     // Tax settings - always set these to ensure clearing works
     data.taxTreatmentType = taxTreatmentType || undefined;
     data.taxFundedFromAccountId = taxFundedFromAccountId || undefined;
+    data.personId = personId || undefined;
 
     onSubmit(data);
   };
@@ -273,15 +275,18 @@ export function EventForm({ event, accounts, persons, forecast, settings, onSubm
               <option value="">Select super account...</option>
               {superAccounts.length > 0 ? (
                 superAccounts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
+                  <option key={a.id} value={a.id}>{a.name}{a.owner ? ` (${persons?.find(p => p.id === a.owner)?.name ?? 'Unknown'})` : ''}</option>
                 ))
               ) : (
                 assetAccounts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
+                  <option key={a.id} value={a.id}>{a.name}{a.owner ? ` (${persons?.find(p => p.id === a.owner)?.name ?? 'Unknown'})` : ''}</option>
                 ))
               )}
             </Select>
           </div>
+          <p className="text-xs text-gray-500 mt-2">
+            The super account's owner determines whose contribution cap this applies to.
+          </p>
 
           {superContributionType === 'concessional' && (superSource === 'salarySacrifice' || superSource === 'personalDeductible') && (
             <div className="mt-4">
@@ -346,8 +351,42 @@ export function EventForm({ event, accounts, persons, forecast, settings, onSubm
             onChange={(e) => setTaxTreatmentType(e.target.value as EventTaxTreatmentType | '')}
           >
             <option value="">None (no tax impact)</option>
+            <option value="taxable">Taxable Income (adds to assessable income)</option>
             <option value="taxDeduction">Tax Deduction (reduces taxable income)</option>
           </Select>
+
+          {taxTreatmentType === 'taxable' && (
+            <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <p className="text-sm text-amber-700">
+                This event will add {amount ? `$${parseFloat(amount).toLocaleString()}` : 'the specified amount'} to assessable income.
+              </p>
+              <p className="text-xs text-amber-600 mt-1">
+                Examples: Ad-hoc income, bonus payments, one-off consulting fees
+              </p>
+              <div className="mt-3 grid grid-cols-2 gap-4">
+                <Select
+                  label="Applies to Person"
+                  value={personId}
+                  onChange={(e) => setPersonId(e.target.value)}
+                >
+                  <option value="">Select person...</option>
+                  {persons?.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </Select>
+                <Select
+                  label="Tax Funded From (override)"
+                  value={taxFundedFromAccountId}
+                  onChange={(e) => setTaxFundedFromAccountId(e.target.value)}
+                >
+                  <option value="">Use default (from Settings)</option>
+                  {assetAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </Select>
+              </div>
+            </div>
+          )}
 
           {taxTreatmentType === 'taxDeduction' && (
             <div className="mt-3 bg-green-50 border border-green-200 rounded-lg p-3">
@@ -357,7 +396,17 @@ export function EventForm({ event, accounts, persons, forecast, settings, onSubm
               <p className="text-xs text-green-600 mt-1">
                 Examples: Work-related deductions, investment expenses
               </p>
-              <div className="mt-3">
+              <div className="mt-3 grid grid-cols-2 gap-4">
+                <Select
+                  label="Applies to Person"
+                  value={personId}
+                  onChange={(e) => setPersonId(e.target.value)}
+                >
+                  <option value="">Select person...</option>
+                  {persons?.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </Select>
                 <Select
                   label="Tax Funded From (override)"
                   value={taxFundedFromAccountId}

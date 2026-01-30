@@ -67,6 +67,7 @@ export const AccountSchema = z.object({
   initialValue: z.number(),
   growthProfile: GrowthProfileSchema,
   returnRate: z.number().optional(),
+  frankingPercentage: z.number().optional(), // Percentage of return that is franked (0-1, e.g., 1.0 = fully franked)
   incomeTargetAccountId: z.string().uuid().optional(),
   startCondition: AccountConditionSchema.optional(),
   endCondition: AccountConditionSchema.optional(),

@@ -1,17 +1,19 @@
 import { useState, useRef } from 'react';
 import { Button, Input, Select } from '../ui';
 import type { Account, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType, AssetSubType, SuperPhase } from '../../schemas/account';
+import type { Person } from '../../schemas/person';
 import type { Settings } from '../../schemas/settings';
 
 interface AccountFormProps {
   account?: Account;
   accounts: Account[];
+  persons: Person[];
   settings?: Settings;
   onSubmit: (data: Omit<Account, 'id'>) => void;
   onCancel: () => void;
 }
 
-export function AccountForm({ account, accounts, settings, onSubmit, onCancel }: AccountFormProps) {
+export function AccountForm({ account, accounts, persons, settings, onSubmit, onCancel }: AccountFormProps) {
   const [name, setName] = useState(account?.name ?? '');
   const [type, setType] = useState(account?.type ?? 'income');
   const [initialValue, setInitialValue] = useState(account?.initialValue?.toString() ?? '0');
@@ -74,11 +76,16 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
 
   const [endBehavior, setEndBehavior] = useState<EndBehavior>(account?.endBehavior ?? 'zero');
   const [transferToAccountId, setTransferToAccountId] = useState(account?.transferToAccountId ?? '');
+  
+  // Owner - which person owns this account
+  const [owner, setOwner] = useState(account?.owner ?? '');
+  
   // Use default bank account from settings for new accounts
   const defaultBankAccount = settings?.defaultBankAccountId ?? '';
   const [depositsToAccountId, setDepositsToAccountId] = useState(account?.depositsToAccountId ?? (account ? '' : defaultBankAccount));
   const [fundedByAccountId, setFundedByAccountId] = useState(account?.fundedByAccountId ?? (account ? '' : defaultBankAccount));
   const [returnRate, setReturnRate] = useState(account?.returnRate ? (account.returnRate * 100).toString() : '');
+  const [frankingPercentage, setFrankingPercentage] = useState(account?.frankingPercentage !== undefined ? (account.frankingPercentage * 100).toString() : '');
   const [incomeTargetAccountId, setIncomeTargetAccountId] = useState(account?.incomeTargetAccountId ?? (account ? '' : defaultBankAccount));
   const [liquidityType, setLiquidityType] = useState<LiquidityType | ''>(account?.liquidityType ?? '');
 
@@ -205,9 +212,11 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
     onSubmit({
       name,
       type,
+      owner: owner || undefined,
       initialValue: parseFloat(initialValue) || 0,
       growthProfile,
       returnRate: type === 'asset' && returnRate ? parseFloat(returnRate) / 100 : undefined,
+      frankingPercentage: type === 'asset' && frankingPercentage ? parseFloat(frankingPercentage) / 100 : undefined,
       incomeTargetAccountId: type === 'asset' && incomeTargetAccountId ? incomeTargetAccountId : undefined,
       liquidityType: type === 'asset' && liquidityType ? liquidityType : undefined,
       startCondition,
@@ -280,16 +289,29 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
         required
       />
 
-      <Select
-        label="Account Type"
-        value={type}
-        onChange={(e) => setType(e.target.value as typeof type)}
-      >
-        <option value="income">Income</option>
-        <option value="expense">Expense</option>
-        <option value="asset">Asset</option>
-        <option value="liability">Liability</option>
-      </Select>
+      <div className="grid grid-cols-2 gap-4">
+        <Select
+          label="Account Type"
+          value={type}
+          onChange={(e) => setType(e.target.value as typeof type)}
+        >
+          <option value="income">Income</option>
+          <option value="expense">Expense</option>
+          <option value="asset">Asset</option>
+          <option value="liability">Liability</option>
+        </Select>
+
+        <Select
+          label="Owner"
+          value={owner}
+          onChange={(e) => setOwner(e.target.value)}
+        >
+          <option value="">No owner</option>
+          {persons.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </Select>
+      </div>
 
       {type === 'asset' && (
         <Select
@@ -543,7 +565,7 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
       {type === 'asset' && (
         <div className="border-t pt-4">
           <h3 className="text-sm font-medium text-gray-700 mb-2">Income Generation</h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <Input
               label="Return Rate (%)"
               type="number"
@@ -551,6 +573,16 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
               value={returnRate}
               onChange={(e) => setReturnRate(e.target.value)}
               placeholder="e.g. 5 for 5%"
+            />
+            <Input
+              label="Franking (%)"
+              type="number"
+              step="1"
+              min="0"
+              max="100"
+              value={frankingPercentage}
+              onChange={(e) => setFrankingPercentage(e.target.value)}
+              placeholder="e.g. 100 for fully franked"
             />
             <Select
               label={returnRate ? "Generates Income To *" : "Generates Income To"}
@@ -565,8 +597,8 @@ export function AccountForm({ account, accounts, settings, onSubmit, onCancel }:
           </div>
           <p className="text-xs text-gray-500 mt-2">
             {returnRate 
-              ? 'Required when return rate is set. Select an income account to receive investment returns.'
-              : 'Select an income account to receive investment returns (e.g., "Dividend Income") that deposits to your bank account.'}
+              ? 'Required when return rate is set. Franking credits gross up the income and provide a tax offset.'
+              : 'Select an income account to receive investment returns. Set franking % for dividend imputation credits.'}
           </p>
         </div>
       )}

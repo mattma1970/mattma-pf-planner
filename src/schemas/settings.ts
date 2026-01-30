@@ -54,6 +54,7 @@ export const SettingsSchema = z.object({
   defaultBankAccountId: z.string().uuid().optional(), // Default account for income deposits, expense funding, etc.
   growthCalculationMethod: GrowthCalculationMethodSchema.default('openingBalance'),
   super: SuperSettingsSchema.default(defaultSuperSettings),
+  companyTaxRate: z.number().default(0.30), // Australian company tax rate for franking credits (30%)
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
@@ -63,4 +64,5 @@ export const defaultSettings: Settings = {
   defaultBankAccountId: undefined,
   growthCalculationMethod: 'openingBalance',
   super: defaultSuperSettings,
+  companyTaxRate: 0.30,
 };

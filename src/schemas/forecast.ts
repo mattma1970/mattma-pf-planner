@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { TaxEventSchema, TaxAggregationSchema } from './tax';
+import { TaxEventSchema, TaxAggregationSchema, TaxByPersonSchema } from './tax';
 
 export const ResolvedAssumptionsSchema = z.object({
   cpi: z.number(),
@@ -56,6 +56,7 @@ export const YearResultSchema = z.object({
   taxPayable: z.number(),
   taxEvents: z.array(TaxEventSchema),
   taxAggregations: z.array(TaxAggregationSchema),
+  taxByPerson: z.array(TaxByPersonSchema).optional(),
   netPosition: z.number(),
   resolvedAssumptions: ResolvedAssumptionsSchema,
   offBalanceSheet: z.array(OffBalanceSheetItemSchema).optional(),

@@ -46,6 +46,9 @@ export const EventSchema = z.object({
   targetAccountId: z.string().uuid().optional(),
   transferAll: z.boolean().optional(),
   
+  // Person this event applies to (for tax attribution)
+  personId: z.string().uuid().optional(),
+  
   // Tax treatment for this event
   taxTreatmentType: EventTaxTreatmentTypeSchema.optional(),
   

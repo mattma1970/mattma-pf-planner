@@ -1,4 +1,4 @@
-import type { Event, Person, OffBalanceSheetItem, SuperContributionType } from '../schemas';
+import type { Account, Event, Person, OffBalanceSheetItem, SuperContributionType } from '../schemas';
 import type { SuperSettings } from '../schemas/settings';
 import { defaultSuperSettings } from '../schemas/settings';
 
@@ -70,11 +70,15 @@ export interface ContributionProcessingResult {
 
 /**
  * Extract super contribution events for a specific year
+ * Person is derived from the target account's owner (or falls back to memberPersonId for backwards compatibility)
  */
 export function getContributionsForYear(
   events: Event[],
-  year: number
+  year: number,
+  accounts: Account[]
 ): { personId: string; amount: number; type: 'concessional' | 'nonConcessional'; reducesIncome: boolean; exemptFromCap: boolean }[] {
+  const accountById = new Map(accounts.map(a => [a.id, a]));
+  
   return events
     .filter(e => e.year === year && e.type === 'superContribution' && e.superContribution)
     .map(e => {
@@ -82,8 +86,12 @@ export function getContributionsForYear(
       // Derive exemptFromCap from contribution type OR explicit flag
       const exemptFromCap = e.superContribution!.exemptFromCap ?? isCapExempt(contributionType);
       
+      // Derive person from target account's owner, fallback to memberPersonId for backwards compatibility
+      const targetAccount = e.targetAccountId ? accountById.get(e.targetAccountId) : undefined;
+      const personId = targetAccount?.owner || e.superContribution!.memberPersonId;
+      
       return {
-        personId: e.superContribution!.memberPersonId,
+        personId,
         amount: e.amount,
         type: getContributionTaxCategory(contributionType), // Map to concessional/nonConcessional
         reducesIncome: e.superContribution!.reducesAssessableIncome ?? false,
@@ -98,9 +106,10 @@ export function getContributionsForYear(
 export function aggregateContributionsByPerson(
   events: Event[],
   year: number,
-  persons: Person[]
+  persons: Person[],
+  accounts: Account[]
 ): Map<string, { concessional: number; nonConcessional: number; incomeReduction: number }> {
-  const contributions = getContributionsForYear(events, year);
+  const contributions = getContributionsForYear(events, year, accounts);
   const byPerson = new Map<string, { concessional: number; nonConcessional: number; incomeReduction: number }>();
   
   // Initialize for all persons
@@ -441,7 +450,7 @@ export function createCapAccountOffBalanceSheetItems(
     const concessionalClosing = concessionalOpening + concessionalMovement;
     
     items.push({
-      id: `conc-cap-${r.personId}-${r.year}`,
+      id: `conc-cap-${r.personId}`,
       type: 'concessionalCapAccount',
       label: `${person.name} - Concessional Cap`,
       personId: r.personId,
@@ -453,7 +462,7 @@ export function createCapAccountOffBalanceSheetItems(
     
     // Non-concessional cap account (bring-forward)
     items.push({
-      id: `nonconc-cap-${r.personId}-${r.year}`,
+      id: `nonconc-cap-${r.personId}`,
       type: 'nonConcessionalCapAccount',
       label: `${person.name} - Non-Concessional Cap`,
       personId: r.personId,

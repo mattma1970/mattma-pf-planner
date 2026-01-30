@@ -14,6 +14,7 @@ import type {
   TaxAggregation,
   TaxSchedule,
   OffBalanceSheetItem,
+  TaxByPerson,
 } from '../schemas';
 import { calculateIncomeTax, calculateCapitalGain, type CgtCalculationResult } from './tax';
 import { resolveAssumptionForYear } from './assumptions';
@@ -37,6 +38,8 @@ interface PendingCgtEvent {
   cgtResult: CgtCalculationResult;
   fundedFromAccountId: string;
   fundedFromAccountName: string;
+  personId?: string;
+  personName?: string;
 }
 
 /**
@@ -155,7 +158,10 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     const accountResults = new Map<string, AccountYearResult>();
     
     // Track per-account income for itemized tax events
-    const incomeByAccount: { accountId: string; accountName: string; amount: number; fundedFromAccountId?: string }[] = [];
+    const incomeByAccount: { accountId: string; accountName: string; amount: number; fundedFromAccountId?: string; personId?: string; personName?: string }[] = [];
+    
+    // Track franking credits generated for the year, per person (by asset owner)
+    const frankingCreditsByPerson = new Map<string, number>();
 
     // ===========================================
     // PHASE 1: Calculate opening balances and identify lifecycle transfers
@@ -252,6 +258,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         
         const fundingAccountId = account.taxFundedFromAccountId ?? settings.defaultTaxFundingAccountId ?? 'unassigned';
         const fundingAccount = accounts.find(a => a.id === fundingAccountId);
+        const ownerPerson = account.owner ? persons.find(p => p.id === account.owner) : undefined;
         
         pendingCgtEvents.push({
           accountId: account.id,
@@ -259,6 +266,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           cgtResult,
           fundedFromAccountId: fundingAccountId,
           fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
+          personId: account.owner,
+          personName: ownerPerson?.name,
         });
         
         // Pay off any liabilities linked to this asset
@@ -294,6 +303,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     const superContributionsByAccount = new Map<string, { 
       concessional: number; 
       nonConcessional: number; 
+      incomeReduction: number;
       personId: string;
     }>();
     
@@ -329,7 +339,11 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       
       // Handle super contribution events
       if (event.type === 'superContribution' && event.superContribution && event.targetAccountId) {
-        const { contributionType, memberPersonId } = event.superContribution;
+        const { contributionType, memberPersonId, reducesAssessableIncome } = event.superContribution;
+        
+        // Derive personId from the super account's owner, fallback to memberPersonId
+        const targetAccount = accounts.find(a => a.id === event.targetAccountId);
+        const personId = targetAccount?.owner || memberPersonId;
         
         // Track contribution to target super account separately (not as a transfer)
         superContributionFlows.set(
@@ -351,10 +365,15 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         const existing = superContributionsByAccount.get(event.targetAccountId) ?? { 
           concessional: 0, 
           nonConcessional: 0, 
-          personId: memberPersonId 
+          incomeReduction: 0,
+          personId 
         };
         if (taxCategory === 'concessional') {
           existing.concessional += event.amount;
+          // Track income reduction for salary sacrifice / personal deductible
+          if (reducesAssessableIncome) {
+            existing.incomeReduction += event.amount;
+          }
         } else {
           existing.nonConcessional += event.amount;
         }
@@ -544,8 +563,33 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           const epochReturnOverride = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'returnRate');
           const effectiveReturnRate = epochReturnOverride ?? account.returnRate;
           if (effectiveReturnRate) {
-            const incomeGenerated = balanceForGrowth * effectiveReturnRate;
-            derivedFlows.push({ accountId: account.incomeTargetAccountId, amount: incomeGenerated, type: 'contribution', description: `Return: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
+            const cashReturn = balanceForGrowth * effectiveReturnRate;
+            
+            // Calculate franking credits if franking percentage is set
+            const frankingPercentage = account.frankingPercentage ?? 0;
+            const companyTaxRate = settings.companyTaxRate ?? 0.30;
+            
+            let grossedUpReturn = cashReturn;
+            let frankingCredits = 0;
+            
+            if (frankingPercentage > 0 && companyTaxRate > 0) {
+              // Only the franked portion gets grossed up
+              const frankedPortion = cashReturn * frankingPercentage;
+              const unfrankedPortion = cashReturn - frankedPortion;
+              
+              // Gross up the franked portion: grossUp = cashAmount / (1 - companyTaxRate)
+              const grossedUpFrankedPortion = frankedPortion / (1 - companyTaxRate);
+              frankingCredits = grossedUpFrankedPortion - frankedPortion;
+              
+              grossedUpReturn = grossedUpFrankedPortion + unfrankedPortion;
+              
+              // Track franking credits by the asset owner
+              const ownerId = account.owner ?? 'unassigned';
+              frankingCreditsByPerson.set(ownerId, (frankingCreditsByPerson.get(ownerId) ?? 0) + frankingCredits);
+            }
+            
+            // Deposit the grossed up amount to the income account (this becomes taxable income)
+            derivedFlows.push({ accountId: account.incomeTargetAccountId, amount: grossedUpReturn, type: 'contribution', description: `Return: ${account.name}${frankingCredits > 0 ? ' (grossed up)' : ''}`, sourceAccountId: account.id, sourceAccountName: account.name });
           }
         }
         if (account.type === 'asset' && account.fundedByAccountId) {
@@ -595,11 +639,14 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         totalIncome += taxableIncome;
         // Track income per account for itemized tax events (skip tax-free income)
         if (taxableIncome > 0 && account.incomeTaxTreatment !== 'taxFree') {
+          const ownerPerson = account.owner ? persons.find(p => p.id === account.owner) : undefined;
           incomeByAccount.push({
             accountId: account.id,
             accountName: account.name,
             amount: taxableIncome,
             fundedFromAccountId: account.taxFundedFromAccountId,
+            personId: account.owner,
+            personName: ownerPerson?.name,
           });
         }
         // Income accounts show total income for the year as endValue
@@ -809,16 +856,44 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         assessableAmount: income.amount,
         fundedFromAccountId: fundingAccountId,
         fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
+        personId: income.personId,
+        personName: income.personName,
       });
     }
 
-    // Generate tax deduction events from events with taxTreatmentType: 'taxDeduction'
+    // Generate tax events from events with taxTreatmentType
+    // Note: Skip super contribution events as they're handled separately in the super contribution tax section
     for (const event of yearEvents) {
-      if (event.taxTreatmentType === 'taxDeduction' && event.amount > 0) {
+      if (event.type === 'superContribution') continue;
+      
+      if (event.taxTreatmentType === 'taxable' && event.amount > 0) {
         const fundingAccountId = event.taxFundedFromAccountId ?? defaultFundingAccountId;
         const fundingAccount = event.taxFundedFromAccountId
           ? accounts.find(a => a.id === event.taxFundedFromAccountId)
           : defaultFundingAccount;
+        
+        // Use the event's explicit personId
+        const eventPerson = event.personId ? persons.find(p => p.id === event.personId) : undefined;
+        
+        taxEvents.push({
+          id: uuidv4(),
+          year,
+          type: 'incomeTax',
+          description: event.description,
+          assessableAmount: event.amount,
+          fundedFromAccountId: fundingAccountId,
+          fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
+          personId: event.personId,
+          personName: eventPerson?.name,
+        });
+      } else if (event.taxTreatmentType === 'taxDeduction' && event.amount > 0) {
+        const fundingAccountId = event.taxFundedFromAccountId ?? defaultFundingAccountId;
+        const fundingAccount = event.taxFundedFromAccountId
+          ? accounts.find(a => a.id === event.taxFundedFromAccountId)
+          : defaultFundingAccount;
+        
+        // Use the event's explicit personId
+        const eventPerson = event.personId ? persons.find(p => p.id === event.personId) : undefined;
         
         taxEvents.push({
           id: uuidv4(),
@@ -828,6 +903,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           assessableAmount: -event.amount, // Negative to reduce taxable income
           fundedFromAccountId: fundingAccountId,
           fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
+          personId: event.personId,
+          personName: eventPerson?.name,
         });
       }
     }
@@ -845,6 +922,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           assessableAmount: cgtEvent.cgtResult.discountedGain,
           fundedFromAccountId: cgtEvent.fundedFromAccountId,
           fundedFromAccountName: cgtEvent.fundedFromAccountName,
+          personId: cgtEvent.personId,
+          personName: cgtEvent.personName,
           grossCapitalGain: cgtEvent.cgtResult.grossCapitalGain,
           discountApplied: cgtEvent.cgtResult.discountApplied,
           costBase: cgtEvent.cgtResult.costBase,
@@ -909,6 +988,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           });
           
           // Add tax event for contributions tax
+          const contribPerson = persons.find(p => p.id === contribs.personId);
           taxEvents.push({
             id: uuidv4(),
             year,
@@ -919,6 +999,29 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             assessableAmount: 0, // Not assessable income - already taxed at source
             fundedFromAccountId: superAccountId, // Paid from super account
             fundedFromAccountName: superAccount.name,
+            personId: contribs.personId,
+            personName: contribPerson?.name,
+          });
+        }
+        
+        // Add tax deduction for salary sacrifice / personal deductible contributions
+        if (contribs.incomeReduction > 0) {
+          const contribPerson = persons.find(p => p.id === contribs.personId);
+          const fundingAccountId = superAccount.taxFundedFromAccountId ?? settings.defaultTaxFundingAccountId ?? 'unassigned';
+          const fundingAccount = accounts.find(a => a.id === fundingAccountId);
+          
+          taxEvents.push({
+            id: uuidv4(),
+            year,
+            type: 'taxDeduction',
+            description: `Salary Sacrifice: ${superAccount.name}`,
+            sourceAccountId: superAccountId,
+            sourceAccountName: superAccount.name,
+            assessableAmount: -contribs.incomeReduction, // Negative to reduce taxable income
+            fundedFromAccountId: fundingAccountId,
+            fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
+            personId: contribs.personId,
+            personName: contribPerson?.name,
           });
         }
         
@@ -950,6 +1053,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             });
           }
           
+          const div293Person = persons.find(p => p.id === contribs.personId);
           taxEvents.push({
             id: uuidv4(),
             year,
@@ -960,6 +1064,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             assessableAmount: 0, // Not assessable income
             fundedFromAccountId: div293FundingAccountId,
             fundedFromAccountName: div293FundingAccount.name,
+            personId: contribs.personId,
+            personName: div293Person?.name,
           });
         }
         
@@ -1016,7 +1122,35 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       });
 
       taxPayable += calculatedTax;
+    }
+    
+    // Apply franking credits as a tax offset (reduces tax payable, can result in refund)
+    // Track per person for proper attribution
+    const totalFrankingCredits = Array.from(frankingCreditsByPerson.values()).reduce((sum, v) => sum + v, 0);
+    if (totalFrankingCredits > 0) {
+      taxPayable -= totalFrankingCredits;
+      // Note: taxPayable can go negative (refund scenario)
+      
+      // Create tax events per person
+      for (const [personId, credits] of frankingCreditsByPerson) {
+        const person = persons.find(p => p.id === personId);
+        taxEvents.push({
+          id: uuidv4(),
+          year,
+          type: 'frankingCreditOffset',
+          description: person ? `Franking Credits (${person.name})` : 'Franking Credit Offset',
+          assessableAmount: -credits, // Negative because it reduces tax
+          fundedFromAccountId: 'unassigned',
+          fundedFromAccountName: 'N/A',
+          personId: personId !== 'unassigned' ? personId : undefined,
+          personName: person?.name,
+        });
+      }
+    }
 
+    for (const [fundedFromAccountId, agg] of aggregationMap) {
+      const calculatedTax = taxAggregations.find(a => a.fundedFromAccountId === fundedFromAccountId)?.calculatedTax ?? 0;
+      
       // Deduct tax from funding account
       if (fundedFromAccountId !== 'unassigned') {
         const fundingResult = accountResults.get(fundedFromAccountId);
@@ -1128,7 +1262,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     
     if (persons.length > 0 && settings.super) {
       // Aggregate contributions by person for this year (cap-relevant only)
-      const contributionsByPerson = aggregateContributionsByPerson(events, year, persons);
+      const contributionsByPerson = aggregateContributionsByPerson(events, year, persons, accounts);
       
       // Process each person's contributions and update cap states
       const newCarryForwardStates = new Map<string, CarryForwardState>();
@@ -1173,6 +1307,47 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       );
       offBalanceSheet.push(...capAccountItems);
     }
+    
+    // Add franking credits to off-balance sheet if any were generated (per person)
+    for (const [personId, credits] of frankingCreditsByPerson) {
+      if (credits > 0) {
+        const person = persons.find(p => p.id === personId);
+        offBalanceSheet.push({
+          id: `franking-credits-${personId}`,
+          type: 'frankingCredits',
+          label: person ? `Franking Credits (${person.name})` : 'Franking Credits',
+          personId: personId !== 'unassigned' ? personId : undefined,
+          value: credits,
+        });
+      }
+    }
+
+    // Calculate per-person tax aggregation
+    const personTaxMap = new Map<string, { personName: string; totalAssessable: number }>();
+    for (const taxEvent of taxEvents) {
+      const personId = taxEvent.personId ?? 'unassigned';
+      const personName = taxEvent.personName ?? 'Unassigned';
+      const existing = personTaxMap.get(personId);
+      if (existing) {
+        existing.totalAssessable += taxEvent.assessableAmount;
+      } else {
+        personTaxMap.set(personId, {
+          personName,
+          totalAssessable: taxEvent.assessableAmount,
+        });
+      }
+    }
+    
+    const taxByPerson: TaxByPerson[] = [];
+    for (const [personId, data] of personTaxMap) {
+      const calculatedTax = calculateIncomeTax(Math.max(0, data.totalAssessable), year);
+      taxByPerson.push({
+        personId,
+        personName: data.personName,
+        totalAssessable: data.totalAssessable,
+        calculatedTax,
+      });
+    }
 
     years.push({
       year,
@@ -1184,6 +1359,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       taxPayable,
       taxEvents,
       taxAggregations,
+      taxByPerson: taxByPerson.length > 0 ? taxByPerson : undefined,
       netPosition,
       resolvedAssumptions,
       offBalanceSheet: offBalanceSheet.length > 0 ? offBalanceSheet : undefined,
