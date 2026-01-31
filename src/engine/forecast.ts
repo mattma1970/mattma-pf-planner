@@ -191,6 +191,36 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       openingValues.set(account.id, opening);
     }
     
+    // Snapshot of prior year inflows at year start (for derived income calculations)
+    // This prevents order-of-processing issues where a reference account might
+    // have its priorYearInflows updated before a derived account reads it
+    const yearStartPriorInflows = new Map(priorYearInflows);
+    
+    // Check for incomplete employer SG accounts (only in first year to avoid repeated warnings)
+    if (year === startYear) {
+      for (const account of accounts) {
+        // Check if this is a derived income account based on a salary account
+        if (
+          account.type === 'income' &&
+          account.basedOnAccountId &&
+          account.basedOnPercentage !== undefined &&
+          !account.superContributionConfig
+        ) {
+          // Check if the source account is a salary account
+          const sourceAccount = accounts.find(a => a.id === account.basedOnAccountId);
+          if (sourceAccount?.type === 'income' && sourceAccount?.incomeSubType === 'salary') {
+            yearWarnings.push({
+              type: 'incompleteEmployerSg',
+              severity: 'warning',
+              message: `Employer SG account needs configuration`,
+              details: `Select a target super account for: ${account.name}`,
+              accountId: account.id,
+            });
+          }
+        }
+      }
+    }
+    
     // First pass: determine which accounts are ending and their transfer amounts
     const lifecycleTransfers: { 
       sourceId: string; 
@@ -657,7 +687,48 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         } else if (account.type === 'income') {
           // Income accounts: growth is based on prior year's inflows, not opening balance
           // This makes growth intuitive: if salary was $100k last year with 3% growth, this year it's $103k
-          if (isFirstActiveYear) {
+          
+          // Check if this is a derived income account (e.g., employer SG based on salary)
+          if (account.basedOnAccountId && account.basedOnPercentage !== undefined) {
+            // Derived income: calculate as a percentage of the reference account's value for this year
+            const refAccount = accounts.find(a => a.id === account.basedOnAccountId);
+            if (refAccount) {
+              // Check if the reference account is active in this year
+              const refAccountActive = isAccountActive(refAccount, year, persons);
+              if (!refAccountActive) {
+                // Reference account hasn't started yet or has ended - derived income is 0
+                projectedValue = 0;
+                growth = 0;
+              } else {
+                // For income-based derivation (e.g., employer SG from salary):
+                // Get the reference income account's projected value for this year
+                // We need to calculate what the reference account's value would be
+                let refValue = 0;
+                if (refAccount.type === 'income') {
+                  // For income accounts, calculate what their value would be this year
+                  // Use yearStartPriorInflows to avoid issues with processing order
+                  const refPriorInflows = yearStartPriorInflows.get(refAccount.id) ?? refAccount.initialValue;
+                  const refIsFirstActive = accountStartYears.get(refAccount.id) === year;
+                  if (refIsFirstActive) {
+                    refValue = refAccount.initialValue;
+                  } else if (refPriorInflows > 0) {
+                    const refYearsSinceStart = year - (accountStartYears.get(refAccount.id) ?? year) + 1;
+                    const refEpochGrowthOverride = getAccountAssumptionForEpoch(refAccount, year, sortedEpochs, 'growthRate');
+                    refValue = projectAccountValue(refAccount, year, refPriorInflows, resolvedAssumptions, refYearsSinceStart, refEpochGrowthOverride);
+                  }
+                } else {
+                  // For asset/liability accounts, use opening value
+                  refValue = openingValues.get(account.basedOnAccountId) ?? refAccount.initialValue;
+                }
+                
+                projectedValue = refValue * account.basedOnPercentage;
+                growth = projectedValue; // All value is "new" each year for pass-through accounts
+              }
+            } else {
+              projectedValue = 0;
+              growth = 0;
+            }
+          } else if (isFirstActiveYear) {
             // First active year: use initialValue directly (no growth yet)
             projectedValue = account.initialValue;
             growth = 0;
@@ -716,11 +787,57 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         }
 
         // PHASE 5: Derived flows
-        if (account.type === 'income' && account.depositsToAccountId) {
-          // All income accounts deposit projectedValue + contributions
-          const totalIncomeToDeposit = projectedValue + contributions;
-          if (totalIncomeToDeposit > 0) {
-            derivedFlows.push({ accountId: account.depositsToAccountId, amount: totalIncomeToDeposit, type: 'contribution', description: `Income: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
+        if (account.type === 'income') {
+          const totalIncomeValue = projectedValue + contributions;
+          
+          if (account.superContributionConfig && totalIncomeValue > 0) {
+            // This is a derived income account that flows to super (e.g., employer SG)
+            // Route to the target super account as a contribution
+            const config = account.superContributionConfig;
+            const targetSuperAccount = accounts.find(a => a.id === config.targetSuperAccountId);
+            const personId = account.owner ?? targetSuperAccount?.owner;
+            
+            // Track contribution for super cap calculations
+            const taxCategory = getContributionTaxCategory(config.contributionType);
+            const effectivePersonId = personId ?? 'unassigned';
+            const existing = superContributionsByAccount.get(config.targetSuperAccountId) ?? {
+              concessional: 0,
+              nonConcessional: 0,
+              preTaxReduction: 0,
+              postTaxDeduction: 0,
+              personId: effectivePersonId,
+            };
+            
+            if (taxCategory === 'concessional') {
+              existing.concessional += totalIncomeValue;
+              if (config.reducesAssessableIncome) {
+                if (config.source === 'salarySacrifice') {
+                  existing.preTaxReduction += totalIncomeValue;
+                } else {
+                  existing.postTaxDeduction += totalIncomeValue;
+                }
+              }
+            } else {
+              existing.nonConcessional += totalIncomeValue;
+            }
+            superContributionsByAccount.set(config.targetSuperAccountId, existing);
+            
+            // Note: We do NOT add to superContributionFlows here because it's too late -
+            // the target super account has already been processed in this loop.
+            // Instead, we use derivedFlows which are applied after all accounts are processed.
+            
+            // Add derived flow for the target super account
+            derivedFlows.push({
+              accountId: config.targetSuperAccountId,
+              amount: totalIncomeValue,
+              type: 'contribution',
+              description: `${config.source === 'employerSG' ? 'Employer SG' : config.source}: ${account.name}`,
+              sourceAccountId: account.id,
+              sourceAccountName: account.name,
+            });
+          } else if (account.depositsToAccountId && totalIncomeValue > 0) {
+            // Standard income account - deposit to target account
+            derivedFlows.push({ accountId: account.depositsToAccountId, amount: totalIncomeValue, type: 'contribution', description: `Income: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
           }
         }
         if (account.type === 'expense' && account.fundedByAccountId) {

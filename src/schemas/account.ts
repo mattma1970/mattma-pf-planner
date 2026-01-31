@@ -53,6 +53,9 @@ export type SpecialConfig = z.infer<typeof SpecialConfigSchema>;
 export const AssetSubTypeSchema = z.enum(['generic', 'superannuation']);
 export type AssetSubType = z.infer<typeof AssetSubTypeSchema>;
 
+export const IncomeSubTypeSchema = z.enum(['salary', 'business', 'investment', 'other']);
+export type IncomeSubType = z.infer<typeof IncomeSubTypeSchema>;
+
 export const SuperPhaseSchema = z.enum(['accumulation', 'pension']);
 export type SuperPhase = z.infer<typeof SuperPhaseSchema>;
 
@@ -61,6 +64,16 @@ export const SuperAccountConfigSchema = z.object({
   preservationYear: z.number().int().optional(), // Year when preservation age is reached
 });
 export type SuperAccountConfig = z.infer<typeof SuperAccountConfigSchema>;
+
+// Super contribution configuration for income accounts that generate super contributions
+// When an income account has this config, its calculated value flows to the target super account
+export const IncomeAsSuperContributionConfigSchema = z.object({
+  targetSuperAccountId: z.string().uuid(),
+  contributionType: z.enum(['concessional', 'nonConcessional', 'capExempt']),
+  source: z.enum(['employerSG', 'employerAdditional', 'salarySacrifice', 'personal', 'spouseContribution', 'governmentCoContribution', 'downsizer']),
+  reducesAssessableIncome: z.boolean().default(false),
+});
+export type IncomeAsSuperContributionConfig = z.infer<typeof IncomeAsSuperContributionConfigSchema>;
 
 export const GrowthOperationSchema = z.enum(['add', 'subtract', 'multiply']);
 export type GrowthOperation = z.infer<typeof GrowthOperationSchema>;
@@ -154,10 +167,18 @@ export const AccountSchema = z.object({
   // Income-specific fields
   // Note: All income/expense accounts are implicitly "pass-through" - opening balance is always 0
   // Growth is calculated based on prior year's inflows, not carried-forward balance
+  incomeSubType: IncomeSubTypeSchema.optional(), // Type of income (salary, business, investment, other)
+  
+  // Derived account fields (for both income and expense accounts)
+  // When set, this account's value is calculated as a percentage of the reference account
+  basedOnAccountId: z.string().uuid().optional(), // Calculate value as % of this account's inflows/balance
+  basedOnPercentage: z.number().optional(), // Percentage of reference account (0.115 = 11.5%)
+  
+  // Super contribution config for derived income accounts (e.g., employer SG)
+  // When set, this income account's calculated value flows to the target super account as a contribution
+  superContributionConfig: IncomeAsSuperContributionConfigSchema.optional(),
   
   // Expense-specific fields
-  basedOnAccountId: z.string().uuid().optional(), // Calculate expense as % of this account's balance
-  basedOnPercentage: z.number().optional(), // Percentage of reference account (0.005 = 0.5%)
   occursEveryYears: z.number().int().positive().optional(), // Expense only incurs every X years
   
   // Liability-specific fields

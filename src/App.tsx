@@ -79,6 +79,7 @@ function App() {
       await createAccount(data as never);
     }
     setAccountModalOpen(false);
+    await refreshForecast();
   };
 
   const handleAccountClick = (accountId: string) => {
@@ -577,6 +578,43 @@ function App() {
               <p className="text-xs text-gray-500 mt-1">
                 Additional 15% tax applies when income + concessional contributions exceeds this threshold
               </p>
+            </div>
+
+            {/* Employer SG Settings */}
+            <div className="mt-6 pt-4 border-t border-purple-200">
+              <h4 className="text-sm font-medium text-purple-700 mb-3">Employer Super Guarantee</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Employer SG Rate (%)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={(settings.super?.employerSgRate ?? 0.115) * 100}
+                    onChange={(e) => updateSettings({ 
+                      super: { ...settings.super, employerSgRate: (parseFloat(e.target.value) || 11.5) / 100 } 
+                    })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Current mandatory employer SG rate (11.5% as of 2024-25)
+                  </p>
+                </div>
+                <div className="flex items-start pt-6">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={settings.super?.autoCreateEmployerSg ?? true}
+                      onChange={(e) => updateSettings({ 
+                        super: { ...settings.super, autoCreateEmployerSg: e.target.checked } 
+                      })}
+                      className="h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                    />
+                    <span className="text-sm text-gray-700">Auto-create employer SG for salary income</span>
+                  </label>
+                </div>
+              </div>
             </div>
 
             {/* Source Configuration */}

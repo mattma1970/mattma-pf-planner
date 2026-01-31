@@ -539,6 +539,43 @@ And: Tax calculated on $50,000 (not $90,000)
 
 ### Epic 12: Superannuation Contributions
 
+#### US-12.0: Automatic employer super contributions (Derived Income)
+**As a** user  
+**I want to** automatically calculate employer super contributions based on my salary  
+**So that** I don't have to manually add super contribution events each year
+
+**Acceptance Criteria:**
+- [x] Can classify income accounts by type (Salary, Business, Investment, Other)
+- [x] Can create a derived income account that calculates as a percentage of another income
+- [x] Can route derived income directly to a super account as a concessional contribution
+- [x] Derived income follows the source income's growth over time
+- [x] Super contributions are tracked against concessional cap
+- [x] 15% contributions tax is automatically applied
+- [x] Division 293 tax applies for high-income earners
+
+**Implementation:**
+- Income accounts have an `incomeSubType` field (salary, business, investment, other)
+- Income accounts can have `basedOnAccountId` and `basedOnPercentage` for derived values
+- Income accounts can have `superContributionConfig` to route to super with correct tax treatment
+- Derived income value = reference account's projected value × percentage
+- No events are created - the derived account calculates its value each year automatically
+
+**Test Case:**
+```
+Given: Salary income = $100,000 with 5% growth
+And: Employer SG derived income at 11.5% of salary
+And: Target super account in accumulation phase
+When: Year 1 calculated
+Then: SG = $11,500, flows to super as concessional contribution
+And: Super receives $11,500 - $1,725 (15% tax) = $9,775 net
+
+When: Year 2 calculated
+Then: Salary = $105,000, SG = $12,075
+And: Contribution cap tracking updated accordingly
+```
+
+---
+
 #### US-12.1: Employer super contributions count toward cap
 **As a** user  
 **I want to** track employer super contributions against my cap  

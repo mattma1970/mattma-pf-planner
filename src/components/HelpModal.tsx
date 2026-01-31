@@ -46,29 +46,16 @@ The tax calculations, superannuation rules, and default settings are based on Au
 
 Follow these steps to set up your first retirement plan:
 
-### 1. Set Up Your Profile
-Click **Settings** in the toolbar, then under "People":
-- Update the default person name from "You" to your actual name
-- Set your birth year and expected retirement year
-- Choose a color to identify your accounts
+**Note**: A default person called "You" is created automatically, so you can start adding accounts right away.
 
-### 2. Add a Bank Account
+### 1. Add a Bank Account
 Click **+ Account** and create:
 - **Name**: "Bank Account" or "Savings"
 - **Type**: Asset
 - **Initial Value**: Your current savings balance
 - **Growth**: Fixed rate (e.g., 4% for a high-interest account)
 
-### 3. Add Your Income
-Click **+ Account** and create:
-- **Name**: "Salary" or your income source
-- **Type**: Income
-- **Initial Value**: Your annual gross income
-- **Growth**: CPI-linked or fixed percentage increase
-- **Owner**: Select yourself
-- **Deposits To**: Your bank account
-
-### 4. Add Superannuation
+### 2. Add Superannuation
 Click **+ Account** and create:
 - **Name**: "Super"
 - **Type**: Asset
@@ -77,14 +64,37 @@ Click **+ Account** and create:
 - **Growth**: Expected return (e.g., 7%)
 - **Owner**: Select yourself
 
-### 5. Add Your Home (Optional)
+### 3. Add Your Income
+Click **+ Account** and create:
+- **Name**: "Salary" or your income source
+- **Type**: Income
+- **Initial Value**: Your annual gross income
+- **Growth**: CPI-linked or fixed percentage increase
+- **Owner**: Select yourself
+- **Deposits To**: Your bank account (created in step 1)
+
+### 4. Add Expenses
+Click **+ Account** and create:
+- **Name**: "Living Expenses" or similar
+- **Type**: Expense
+- **Initial Value**: Your annual expenses
+- **Growth**: CPI-linked to track inflation
+- **Funded By**: Your bank account
+
+### 5. Set Up Your Profile (Optional)
+Click **Settings** in the toolbar, then under "People":
+- Update the default person name from "You" to your actual name
+- Set your birth year and expected retirement year
+- Choose a color to identify your accounts
+
+### 6. Add Your Home (Optional)
 Click **+ Account** and create:
 - **Name**: "Home"
 - **Type**: Asset
 - **Initial Value**: Current property value
 - **Growth**: Expected property growth (e.g., 3-5%)
 
-### 6. Add a Mortgage (Optional)
+### 7. Add a Mortgage (Optional)
 If you have a mortgage:
 - **Name**: "Mortgage"
 - **Type**: Liability
@@ -105,6 +115,19 @@ Money coming in each year (salary, dividends, rental income). Income accounts:
 - Start fresh each year (no carried balance)
 - Can deposit to an asset account
 - Can be assigned to a person for tax purposes
+- **Income Type**: Classify as Salary/Wages, Business, Investment, or Other
+
+#### Derived Income (Employer Super)
+Create an income account that automatically calculates its value as a percentage of another income:
+1. Select "Calculate Based On" and choose the source income (e.g., Salary)
+2. Enter the percentage (e.g., 11.5% for Super Guarantee)
+3. Enable "Route as super contribution" to flow directly to a super account
+4. Select the target super account
+
+This automatically handles:
+- **Contribution cap tracking**: Counts toward concessional contribution limits
+- **15% contributions tax**: Deducted from the super account
+- **Division 293 tax**: Applied for high-income earners (>$250k)
 
 ### Expense
 Regular outgoings (living costs, insurance, rates). Expense accounts:
@@ -303,7 +326,7 @@ Review and update your plan annually with actual figures.
   {
     id: 'faq',
     title: 'FAQ',
-    keywords: ['faq', 'frequently asked', 'questions', 'how to', 'rollover', 'pension', 'transfer', 'delete', 'remove', 'loan', 'payoff', 'offset', 'net worth', 'liability', 'mortgage'],
+    keywords: ['faq', 'frequently asked', 'questions', 'how to', 'rollover', 'pension', 'transfer', 'delete', 'remove', 'loan', 'payoff', 'offset', 'net worth', 'liability', 'mortgage', 'employer super', 'super guarantee', 'sg'],
     content: `
 ## Frequently Asked Questions
 
@@ -315,6 +338,7 @@ Review and update your plan annually with actual figures.
 - [One-time bonus or inheritance](#faq-one-time)
 - [Super contribution blocked](#faq-super-blocked)
 - [Dividends with franking credits](#faq-franking)
+- [Employer super contributions](#faq-employer-super)
 - [Delete an account](#faq-delete)
 - [Loan linked to asset sale](#faq-loan-payoff)
 - [Loan not affecting Net Worth](#faq-net-worth)
@@ -453,6 +477,25 @@ Both values are shown in the Calculated Totals section of the spreadsheet view.
 ### Can I delete tax tracking accounts? {#faq-tax-accounts}
 
 Tax tracking accounts (carry-forward, cap trackers, franking credits) are automatically created for each person. They are managed by the system for tax calculations and should not typically be deleted manually.
+
+### How do I add employer super contributions? {#faq-employer-super}
+
+To automatically add employer Super Guarantee (SG) contributions:
+
+1. Create your salary income account first
+2. Create a new income account called "Employer SG" (or similar)
+3. In the "Derived Income" section:
+   - Set "Calculate Based On" to your salary account
+   - Set the percentage to 11.5% (or your employer's rate)
+   - Check "Route as super contribution"
+   - Select your super account as the target
+
+The SG contribution will:
+- Automatically calculate based on your salary each year
+- Follow salary growth over time
+- Count toward your concessional contribution cap
+- Have 15% contributions tax applied
+- Trigger Division 293 tax if your income exceeds $250,000
 `,
   },
 ];

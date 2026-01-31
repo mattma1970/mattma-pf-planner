@@ -2439,4 +2439,337 @@ describe('calculateForecast', () => {
       expect(getExpense(2030)).toBeCloseTo(10816, 0);
     });
   });
+
+  describe('derived income with super contribution', () => {
+    it('calculates employer SG as percentage of salary and flows to super account', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-1111-1111-1111-111111111111',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 10000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const superAccount = createTestAccount({
+        id: 'super-1111-1111-1111-111111111111',
+        name: 'Super',
+        type: 'asset',
+        assetSubType: 'superannuation',
+        superConfig: { phase: 'accumulation' },
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        owner: 'person-1111-1111-1111-111111111111',
+      });
+
+      const salaryAccount = createTestAccount({
+        id: 'salary-1111-1111-1111-111111111111',
+        name: 'Salary',
+        type: 'income',
+        incomeSubType: 'salary',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: bankAccount.id,
+        owner: 'person-1111-1111-1111-111111111111',
+      });
+
+      const employerSgAccount = createTestAccount({
+        id: 'employer-sg-1111-1111-111111111111',
+        name: 'Employer SG',
+        type: 'income',
+        incomeSubType: 'other',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        basedOnAccountId: salaryAccount.id,
+        basedOnPercentage: 0.115, // 11.5%
+        superContributionConfig: {
+          targetSuperAccountId: superAccount.id,
+          contributionType: 'concessional',
+          source: 'employerSG',
+          reducesAssessableIncome: false,
+        },
+        owner: 'person-1111-1111-1111-111111111111',
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, superAccount, salaryAccount, employerSgAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [defaultPerson],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years.find((y) => y.year === 2025)!;
+      
+      // Employer SG should be 11.5% of $100,000 = $11,500
+      const sgAccount = year2025.accounts.find((a) => a.accountId === employerSgAccount.id)!;
+      expect(sgAccount.endValue).toBe(11500);
+      
+      // Super should receive the SG contribution (minus 15% contributions tax)
+      // $11,500 contribution - $1,725 (15% tax) = $9,775 net
+      const superResult = year2025.accounts.find((a) => a.accountId === superAccount.id)!;
+      // Opening: $100,000 + $11,500 contribution - $1,725 contributions tax = $109,775
+      expect(superResult.endValue).toBeCloseTo(109775, 0);
+      
+      // Salary should still deposit to bank
+      const bankResult = year2025.accounts.find((a) => a.accountId === bankAccount.id)!;
+      expect(bankResult.contributions).toBe(100000);
+    });
+
+    it('derived income follows the source income growth', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-1111-1111-1111-111111111111',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const superAccount = createTestAccount({
+        id: 'super-1111-1111-1111-111111111111',
+        name: 'Super',
+        type: 'asset',
+        assetSubType: 'superannuation',
+        superConfig: { phase: 'accumulation' },
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        owner: 'person-1111-1111-1111-111111111111',
+      });
+
+      const salaryAccount = createTestAccount({
+        id: 'salary-1111-1111-1111-111111111111',
+        name: 'Salary',
+        type: 'income',
+        incomeSubType: 'salary',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0.05 }, // 5% growth
+        depositsToAccountId: bankAccount.id,
+        owner: 'person-1111-1111-1111-111111111111',
+      });
+
+      const employerSgAccount = createTestAccount({
+        id: 'employer-sg-1111-1111-111111111111',
+        name: 'Employer SG',
+        type: 'income',
+        incomeSubType: 'other',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        basedOnAccountId: salaryAccount.id,
+        basedOnPercentage: 0.10, // 10% for easier math
+        superContributionConfig: {
+          targetSuperAccountId: superAccount.id,
+          contributionType: 'concessional',
+          source: 'employerSG',
+          reducesAssessableIncome: false,
+        },
+        owner: 'person-1111-1111-1111-111111111111',
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, superAccount, salaryAccount, employerSgAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [defaultPerson],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      // Year 1: Salary $100,000 → SG $10,000
+      const year2025 = result.years.find((y) => y.year === 2025)!;
+      const salary2025 = year2025.accounts.find((a) => a.accountId === salaryAccount.id)!;
+      const sg2025 = year2025.accounts.find((a) => a.accountId === employerSgAccount.id)!;
+      expect(salary2025.endValue).toBe(100000);
+      expect(sg2025.endValue).toBe(10000);
+      
+      // Year 2: Salary $105,000 → SG $10,500
+      const year2026 = result.years.find((y) => y.year === 2026)!;
+      const salary2026 = year2026.accounts.find((a) => a.accountId === salaryAccount.id)!;
+      const sg2026 = year2026.accounts.find((a) => a.accountId === employerSgAccount.id)!;
+      expect(salary2026.endValue).toBe(105000);
+      expect(sg2026.endValue).toBe(10500);
+      
+      // Year 3: Salary $110,250 → SG $11,025
+      const year2027 = result.years.find((y) => y.year === 2027)!;
+      const salary2027 = year2027.accounts.find((a) => a.accountId === salaryAccount.id)!;
+      const sg2027 = year2027.accounts.find((a) => a.accountId === employerSgAccount.id)!;
+      expect(salary2027.endValue).toBeCloseTo(110250, 0);
+      expect(sg2027.endValue).toBeCloseTo(11025, 0);
+    });
+
+    it('does not double-count super contributions from derived income', () => {
+      // Regression test: superContributionConfig flows were being added both via
+      // superContributionFlows AND derivedFlows, causing double-counting
+      const superAccount = createTestAccount({
+        id: 'super-1111-1111-1111-111111111111',
+        name: 'Super',
+        type: 'asset',
+        assetSubType: 'superannuation',
+        superConfig: { phase: 'accumulation' },
+        initialValue: 0, // Start at 0 so we can verify exact contribution
+        growthProfile: { type: 'fixed', rate: 0 },
+        owner: 'person-1111-1111-1111-111111111111',
+      });
+
+      const salaryAccount = createTestAccount({
+        id: 'salary-1111-1111-1111-111111111111',
+        name: 'Salary',
+        type: 'income',
+        incomeSubType: 'salary',
+        initialValue: 75000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        owner: 'person-1111-1111-1111-111111111111',
+      });
+
+      const employerSgAccount = createTestAccount({
+        id: 'employer-sg-1111-1111-111111111111',
+        name: 'Employer SG',
+        type: 'income',
+        incomeSubType: 'other',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        basedOnAccountId: salaryAccount.id,
+        basedOnPercentage: 0.115, // 11.5% SG rate
+        superContributionConfig: {
+          targetSuperAccountId: superAccount.id,
+          contributionType: 'concessional',
+          source: 'employerSG',
+          reducesAssessableIncome: false,
+        },
+        owner: 'person-1111-1111-1111-111111111111',
+      });
+
+      const result = calculateForecast({
+        accounts: [superAccount, salaryAccount, employerSgAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [defaultPerson],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years.find((y) => y.year === 2025)!;
+      
+      // Employer SG should be 11.5% of $75,000 = $8,625
+      const sgAccount = year2025.accounts.find((a) => a.accountId === employerSgAccount.id)!;
+      expect(sgAccount.endValue).toBe(8625);
+      
+      // Super contributions field should show exactly $8,625 (not doubled to $17,250)
+      const superResult = year2025.accounts.find((a) => a.accountId === superAccount.id)!;
+      expect(superResult.contributions).toBe(8625);
+      
+      // Super endValue should be $8,625 - 15% contributions tax = $7,331.25
+      // (starting from $0 with no growth)
+      expect(superResult.endValue).toBeCloseTo(7331.25, 0);
+    });
+
+    it('generates warning for derived SG account without superContributionConfig', () => {
+      const salaryAccount = createTestAccount({
+        id: 'salary-1111-1111-1111-111111111111',
+        name: 'Salary',
+        type: 'income',
+        incomeSubType: 'salary',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0.05 },
+        owner: 'person-1111-1111-1111-111111111111',
+      });
+
+      const employerSgAccount = createTestAccount({
+        id: 'employer-sg-1111-1111-111111111111',
+        name: 'Employer SG',
+        type: 'income',
+        incomeSubType: 'other',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        basedOnAccountId: salaryAccount.id,
+        basedOnPercentage: 0.115,
+        owner: 'person-1111-1111-1111-111111111111',
+        // No superContributionConfig - this should trigger a warning
+      });
+
+      const result = calculateForecast({
+        accounts: [salaryAccount, employerSgAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [defaultPerson],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2026,
+      });
+
+      // Should have a warning in the first year
+      const year2025 = result.years.find((y) => y.year === 2025)!;
+      expect(year2025.warnings).toBeDefined();
+      expect(year2025.warnings!.length).toBe(1);
+      expect(year2025.warnings![0].type).toBe('incompleteEmployerSg');
+      expect(year2025.warnings![0].accountId).toBe(employerSgAccount.id);
+      expect(year2025.warnings![0].message).toContain('Employer SG account needs configuration');
+
+      // Second year should NOT have the warning (only shown in first year)
+      const year2026 = result.years.find((y) => y.year === 2026)!;
+      expect(year2026.warnings).toBeUndefined();
+    });
+
+    it('does not generate warning for derived SG account with superContributionConfig', () => {
+      const superAccount = createTestAccount({
+        id: 'super-1111-1111-1111-111111111111',
+        name: 'Super Account',
+        type: 'asset',
+        assetSubType: 'superannuation',
+        owner: 'person-1111-1111-1111-111111111111',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0.06 },
+      });
+
+      const salaryAccount = createTestAccount({
+        id: 'salary-1111-1111-1111-111111111111',
+        name: 'Salary',
+        type: 'income',
+        incomeSubType: 'salary',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0.05 },
+        owner: 'person-1111-1111-1111-111111111111',
+      });
+
+      const employerSgAccount = createTestAccount({
+        id: 'employer-sg-1111-1111-111111111111',
+        name: 'Employer SG',
+        type: 'income',
+        incomeSubType: 'other',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        basedOnAccountId: salaryAccount.id,
+        basedOnPercentage: 0.115,
+        owner: 'person-1111-1111-1111-111111111111',
+        superContributionConfig: {
+          targetSuperAccountId: superAccount.id,
+          contributionType: 'concessional',
+          source: 'employerSG',
+          reducesAssessableIncome: false,
+        },
+      });
+
+      const result = calculateForecast({
+        accounts: [superAccount, salaryAccount, employerSgAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [defaultPerson],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2026,
+      });
+
+      // Should not have any incompleteEmployerSg warnings
+      const year2025 = result.years.find((y) => y.year === 2025)!;
+      const sgWarnings = year2025.warnings?.filter(w => w.type === 'incompleteEmployerSg') ?? [];
+      expect(sgWarnings.length).toBe(0);
+    });
+  });
 });

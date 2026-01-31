@@ -7,7 +7,7 @@ export const ResolvedAssumptionsSchema = z.object({
 export type ResolvedAssumptions = z.infer<typeof ResolvedAssumptionsSchema>;
 
 export const ForecastWarningSchema = z.object({
-  type: z.enum(['blockedContribution', 'capExceeded', 'negativeBalance', 'other']),
+  type: z.enum(['blockedContribution', 'capExceeded', 'negativeBalance', 'incompleteEmployerSg', 'other']),
   severity: z.enum(['info', 'warning', 'error']),
   message: z.string(),
   details: z.string().optional(),

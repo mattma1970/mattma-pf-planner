@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { Button, Input, Select } from '../ui';
-import type { Account, AccountInput, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType, AssetSubType, SuperPhase } from '../../schemas/account';
+import type { Account, AccountInput, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType, AssetSubType, SuperPhase, IncomeSubType, IncomeAsSuperContributionConfig } from '../../schemas/account';
 import type { Person } from '../../schemas/person';
 import type { Settings } from '../../schemas/settings';
 import type { AccountReference } from '../../actions/accounts';
@@ -135,19 +135,41 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
   );
   const [occursEveryYears, setOccursEveryYears] = useState(account?.occursEveryYears?.toString() ?? '');
 
+  // Income-specific settings
+  const [incomeSubType, setIncomeSubType] = useState<IncomeSubType>(account?.incomeSubType ?? 'salary');
+  
+  // Super contribution config for derived income (e.g., employer SG)
+  const [superContribEnabled, setSuperContribEnabled] = useState(!!account?.superContributionConfig);
+  const [superContribTargetAccountId, setSuperContribTargetAccountId] = useState(
+    account?.superContributionConfig?.targetSuperAccountId ?? ''
+  );
+  const [superContribType, _setSuperContribType] = useState<IncomeAsSuperContributionConfig['contributionType']>(
+    account?.superContributionConfig?.contributionType ?? 'concessional'
+  );
+  const [superContribSource, setSuperContribSource] = useState<IncomeAsSuperContributionConfig['source']>(
+    account?.superContributionConfig?.source ?? 'employerSG'
+  );
+
   const otherAccounts = accounts.filter((a) => a.id !== account?.id);
   const assetAccounts = accounts.filter((a) => a.type === 'asset' && a.id !== account?.id);
   const incomeAccounts = accounts.filter((a) => a.type === 'income' && a.id !== account?.id);
+  const superAccounts = accounts.filter((a) => a.type === 'asset' && a.assetSubType === 'superannuation' && a.id !== account?.id);
+  
+  // For derived income, also include any income account (for flexibility)
+  const derivableIncomeAccounts = accounts.filter((a) => a.type === 'income' && a.id !== account?.id && !a.basedOnAccountId);
 
   // Validation state
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const errorRef = useRef<HTMLDivElement>(null);
 
   // Derived validation requirements
-  const requiresDepositsTo = type === 'income';
+  // For derived income accounts with super contribution config, they don't need depositsTo
+  const isDerivedSuperIncome = type === 'income' && basedOnAccountId && superContribEnabled;
+  const requiresDepositsTo = type === 'income' && !isDerivedSuperIncome;
   const requiresFundedBy = type === 'expense' || type === 'liability';
   const requiresIncomeTarget = type === 'asset' && returnRate !== '';
   const requiresTransferTo = endConditionType !== 'none' && (endBehavior === 'transfer' || endBehavior === 'sell' || endBehavior === 'sellNoCgt');
+  const requiresSuperTarget = isDerivedSuperIncome;
 
   const handleDelete = async () => {
     if (!onDelete) return;
@@ -185,6 +207,12 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
     }
     if (requiresTransferTo && !transferToAccountId) {
       errors.push('Accounts with sell or transfer end behavior require a destination account');
+    }
+    if (requiresSuperTarget && !superContribTargetAccountId) {
+      errors.push('Derived super contributions require a target super account');
+    }
+    if (type === 'income' && basedOnAccountId && !basedOnPercentage) {
+      errors.push('Derived income accounts require a percentage');
     }
 
     if (errors.length > 0) {
@@ -289,13 +317,26 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       } : undefined,
       
       // Expense-specific settings
-      basedOnAccountId: type === 'expense' && basedOnAccountId ? basedOnAccountId : undefined,
-      basedOnPercentage: type === 'expense' && basedOnAccountId && basedOnPercentage 
-        ? parseFloat(basedOnPercentage) / 100 
-        : undefined,
       occursEveryYears: type === 'expense' && occursEveryYears 
         ? parseInt(occursEveryYears) 
         : undefined,
+      
+      // Income-specific settings
+      incomeSubType: type === 'income' ? incomeSubType : undefined,
+      
+      // Derived account settings (for both income and expense)
+      basedOnAccountId: (type === 'expense' || type === 'income') && basedOnAccountId ? basedOnAccountId : undefined,
+      basedOnPercentage: (type === 'expense' || type === 'income') && basedOnAccountId && basedOnPercentage 
+        ? parseFloat(basedOnPercentage) / 100 
+        : undefined,
+      
+      // Super contribution config for derived income accounts
+      superContributionConfig: type === 'income' && basedOnAccountId && superContribEnabled && superContribTargetAccountId ? {
+        targetSuperAccountId: superContribTargetAccountId,
+        contributionType: superContribType,
+        source: superContribSource,
+        reducesAssessableIncome: false, // Employer SG doesn't reduce assessable income
+      } : undefined,
     });
   };
 
@@ -474,16 +515,108 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       {type === 'income' && (
         <>
           <Select
-            label="Deposits To *"
-            hint="The asset account where this income will be deposited each year."
-            value={depositsToAccountId}
-            onChange={(e) => setDepositsToAccountId(e.target.value)}
+            label="Income Type"
+            hint="Type of income. Salary income is eligible for employer super contributions."
+            value={incomeSubType}
+            onChange={(e) => setIncomeSubType(e.target.value as IncomeSubType)}
           >
-            <option value="">Select account...</option>
-            {assetAccounts.map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
+            <option value="salary">Salary / Wages</option>
+            <option value="business">Business / Contractor</option>
+            <option value="investment">Investment</option>
+            <option value="other">Other</option>
           </Select>
+          
+          {/* Derived income section (for employer SG, etc.) */}
+          <div className="border-t pt-4 mt-4">
+            <h3 className="text-sm font-medium text-gray-700 mb-2">Derived Income (Optional)</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Create income that is calculated as a percentage of another income account (e.g., employer super at 11.5% of salary).
+            </p>
+            
+            <Select
+              label="Calculate Based On"
+              value={basedOnAccountId}
+              onChange={(e) => {
+                setBasedOnAccountId(e.target.value);
+                if (e.target.value && !basedOnPercentage) {
+                  setBasedOnPercentage('11.5'); // Default to SG rate
+                }
+              }}
+            >
+              <option value="">None (use initial value)</option>
+              {derivableIncomeAccounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </Select>
+            
+            {basedOnAccountId && (
+              <div className="mt-3 space-y-3">
+                <Input
+                  label="Percentage (%)"
+                  hint="e.g., 11.5 for employer super guarantee"
+                  type="number"
+                  step="0.1"
+                  value={basedOnPercentage}
+                  onChange={(e) => setBasedOnPercentage(e.target.value)}
+                />
+                
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={superContribEnabled}
+                      onChange={(e) => setSuperContribEnabled(e.target.checked)}
+                      className="rounded border-gray-300"
+                    />
+                    Route as super contribution
+                  </label>
+                  <p className="text-xs text-amber-700 mt-1">
+                    Enable this to flow the derived amount directly to a superannuation account as a concessional contribution (counts towards contribution caps).
+                  </p>
+                  
+                  {superContribEnabled && (
+                    <div className="mt-3 space-y-3">
+                      <Select
+                        label="Target Super Account *"
+                        value={superContribTargetAccountId}
+                        onChange={(e) => setSuperContribTargetAccountId(e.target.value)}
+                      >
+                        <option value="">Select super account...</option>
+                        {superAccounts.map((a) => (
+                          <option key={a.id} value={a.id}>{a.name}</option>
+                        ))}
+                      </Select>
+                      
+                      <Select
+                        label="Contribution Source"
+                        value={superContribSource}
+                        onChange={(e) => setSuperContribSource(e.target.value as IncomeAsSuperContributionConfig['source'])}
+                      >
+                        <option value="employerSG">Employer SG (mandatory)</option>
+                        <option value="employerAdditional">Employer Additional</option>
+                        <option value="salarySacrifice">Salary Sacrifice</option>
+                      </Select>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+          
+          {!isDerivedSuperIncome && (
+            <Select
+              label="Deposits To *"
+              hint="The asset account where this income will be deposited each year."
+              value={depositsToAccountId}
+              onChange={(e) => setDepositsToAccountId(e.target.value)}
+            >
+              <option value="">Select account...</option>
+              {assetAccounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </Select>
+          )}
+          
           <Select
             label="Tax Treatment"
             value={incomeTaxTreatment}

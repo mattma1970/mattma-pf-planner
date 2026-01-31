@@ -26,6 +26,8 @@ const testSettings: SuperSettings = {
   contributionsTaxRate: 0.15,
   div293Threshold: 250000,
   div293Rate: 0.15,
+  employerSgRate: 0.115,
+  autoCreateEmployerSg: true,
 };
 
 describe('calculateAvailableCarryForward', () => {

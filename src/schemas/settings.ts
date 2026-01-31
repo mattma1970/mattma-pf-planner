@@ -34,6 +34,10 @@ export const SuperSettingsSchema = z.object({
   div293Threshold: z.number().default(250000),
   div293Rate: z.number().default(0.15),
   sourceConfigs: z.array(SuperContributionSourceConfigSchema).optional(),
+  // Employer Super Guarantee rate (as decimal, e.g., 0.115 for 11.5%)
+  employerSgRate: z.number().default(0.115),
+  // Whether to auto-create employer SG accounts for new salary income
+  autoCreateEmployerSg: z.boolean().default(true),
 });
 export type SuperSettings = z.infer<typeof SuperSettingsSchema>;
 
@@ -45,6 +49,8 @@ export const defaultSuperSettings: SuperSettings = {
   contributionsTaxRate: 0.15,
   div293Threshold: 250000,
   div293Rate: 0.15,
+  employerSgRate: 0.115,
+  autoCreateEmployerSg: true,
 };
 
 export const SettingsSchema = z.object({

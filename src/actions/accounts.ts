@@ -1,7 +1,12 @@
 import { v4 as uuidv4 } from 'uuid';
-import type { Account, AccountInput, Event } from '../schemas';
+import type { Account, AccountInput, Event, Settings } from '../schemas';
 import { AccountSchema } from '../schemas';
 import { repository } from '../data';
+
+export interface CreateAccountResult {
+  account: Account;
+  linkedSgAccount?: Account;
+}
 
 export async function createAccount(data: Omit<AccountInput, 'id'>): Promise<Account> {
   // Use Zod parse to apply all defaults (category, includeInNetWorth, growthProfile sub-fields)
@@ -10,7 +15,58 @@ export async function createAccount(data: Omit<AccountInput, 'id'>): Promise<Acc
     id: uuidv4(),
   });
   await repository.saveAccount(account);
+
+  // Auto-create employer SG account for salary income
+  if (account.type === 'income' && account.incomeSubType === 'salary') {
+    const settings = await repository.getSettings();
+    if (settings.super?.autoCreateEmployerSg) {
+      await createEmployerSgAccount(account, settings);
+    }
+  }
+
   return account;
+}
+
+async function createEmployerSgAccount(salaryAccount: Account, settings: Settings): Promise<Account | undefined> {
+  const accounts = await repository.getAccounts();
+  const sgRate = settings.super?.employerSgRate ?? 0.115;
+
+  // Find super accounts for this owner
+  const ownerSuperAccounts = salaryAccount.owner
+    ? accounts.filter(
+        (a) =>
+          a.type === 'asset' &&
+          a.assetSubType === 'superannuation' &&
+          a.owner === salaryAccount.owner
+      )
+    : [];
+
+  // Build superContributionConfig if exactly 1 super account exists
+  const superContributionConfig =
+    ownerSuperAccounts.length === 1
+      ? {
+          targetSuperAccountId: ownerSuperAccounts[0].id,
+          contributionType: 'concessional' as const,
+          source: 'employerSG' as const,
+          reducesAssessableIncome: false,
+        }
+      : undefined;
+
+  const sgAccount = AccountSchema.parse({
+    id: uuidv4(),
+    name: `${salaryAccount.name} - Employer SG`,
+    type: 'income',
+    incomeSubType: 'other',
+    initialValue: 0,
+    growthProfile: { type: 'fixed', rate: 0 },
+    basedOnAccountId: salaryAccount.id,
+    basedOnPercentage: sgRate,
+    owner: salaryAccount.owner,
+    superContributionConfig,
+  });
+
+  await repository.saveAccount(sgAccount);
+  return sgAccount;
 }
 
 export async function updateAccount(id: string, updates: Partial<Account>): Promise<Account> {
