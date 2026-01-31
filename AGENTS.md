@@ -60,6 +60,11 @@ Engine functions need comprehensive tests - financial calculations must be corre
 
 Run `npm test` after any changes to `src/engine/`.
 
+### Required Tests
+
+- **New features**: All new features must include corresponding tests before completion.
+- **Bug fixes**: After debugging and fixing an issue, add a regression test that would have caught the bug.
+
 ## Australian Tax
 
 Tax calculations use 2024-25 Australian brackets (hardcoded in `src/engine/tax.ts`). Future phases will make these configurable.
