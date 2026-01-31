@@ -24,12 +24,12 @@ const personColorOptions: { value: PersonColor; bgClass: string }[] = [
 ];
 
 function App() {
-  const { accounts, create: createAccount, update: updateAccount, reorder: reorderAccounts } = useAccounts();
-  const { events, create: createEvent, update: updateEvent, remove: removeEvent } = useEvents();
+  const { accounts, create: createAccount, update: updateAccount, reorder: reorderAccounts, refresh: refreshAccounts } = useAccounts();
+  const { events, create: createEvent, update: updateEvent, remove: removeEvent, refresh: refreshEvents } = useEvents();
   const { epochs, create: createEpoch, update: updateEpoch, remove: removeEpoch, refresh: refreshEpochs } = useEpochs();
-  const { persons, create: createPerson, update: updatePerson, remove: removePerson } = usePersons();
-  const { assumptions, update: updateAssumptions } = useAssumptions();
-  const { settings, updateSettings } = useSettings();
+  const { persons, create: createPerson, update: updatePerson, remove: removePerson, refresh: refreshPersons } = usePersons();
+  const { assumptions, update: updateAssumptions, refresh: refreshAssumptions } = useAssumptions();
+  const { settings, updateSettings, refresh: refreshSettings } = useSettings();
 
   const currentYear = new Date().getFullYear();
   const { forecast, loading, refresh: refreshForecast } = useForecast(currentYear, currentYear + 40);
@@ -49,6 +49,18 @@ function App() {
   useEffect(() => {
     refreshForecast();
   }, [accounts, assumptions, epochs, events, settings, refreshForecast]);
+
+  const handleDataChange = async () => {
+    await Promise.all([
+      refreshPersons(),
+      refreshAccounts(),
+      refreshEvents(),
+      refreshEpochs(),
+      refreshAssumptions(),
+      refreshSettings(),
+    ]);
+    await refreshForecast();
+  };
 
   const handleAddAccount = () => {
     setEditingAccount(null);
@@ -128,6 +140,10 @@ function App() {
         onAddAccount={handleAddAccount} 
         onShowAssumptions={() => setShowEpochs(true)}
         onShowEvents={() => setShowEvents(true)}
+        onShowSettings={() => setShowSettings(true)}
+        onDataChange={handleDataChange}
+        showEventHighlights={showEventHighlights}
+        onToggleEventHighlights={() => setShowEventHighlights(!showEventHighlights)}
       />
       <main className="p-4">
         {loading ? (
@@ -136,19 +152,6 @@ function App() {
           </div>
         ) : (
           <>
-            <div className="flex justify-between items-center mb-4">
-              <div className="flex gap-2">
-                <Button
-                  variant={showEventHighlights ? 'primary' : 'secondary'}
-                  onClick={() => setShowEventHighlights(!showEventHighlights)}
-                >
-                  {showEventHighlights ? 'Hide Events' : 'Show Events'}
-                </Button>
-              </div>
-              <Button variant="secondary" onClick={() => setShowSettings(true)}>
-                Defaults
-              </Button>
-            </div>
             <SpreadsheetView
               forecast={forecast}
               accounts={accounts as unknown as Account[]}

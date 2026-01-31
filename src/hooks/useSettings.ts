@@ -7,12 +7,16 @@ export function useSettings() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    repository.getSettings().then((s) => {
-      setSettings(s);
-      setLoading(false);
-    });
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    const s = await repository.getSettings();
+    setSettings(s);
+    setLoading(false);
   }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   const updateSettings = useCallback(async (updates: Partial<Settings>) => {
     const newSettings = { ...settings, ...updates };
@@ -20,5 +24,5 @@ export function useSettings() {
     await repository.saveSettings(newSettings);
   }, [settings]);
 
-  return { settings, updateSettings, loading };
+  return { settings, updateSettings, loading, refresh };
 }
