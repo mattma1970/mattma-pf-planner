@@ -50,7 +50,9 @@ const totalsRows: TotalsRow[] = [
   { label: 'Total Expenses', getValue: (y) => y.totalExpenses },
   { label: 'Total Tax', getValue: (y) => y.taxPayable },
   { label: 'Cash Flow', getValue: (y) => y.totalIncome - y.totalExpenses - y.taxPayable },
-  { label: 'Net Worth', getValue: (y) => y.totalAssets, isBold: true },
+  { label: 'Total Assets', getValue: (y) => y.totalAssets },
+  { label: 'Total Liabilities', getValue: (y) => y.totalLiabilities },
+  { label: 'Net Worth', getValue: (y) => y.totalAssets - y.totalLiabilities, isBold: true },
 ];
 
 

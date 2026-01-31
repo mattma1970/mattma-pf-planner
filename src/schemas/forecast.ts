@@ -61,6 +61,7 @@ export const YearResultSchema = z.object({
   year: z.number().int(),
   accounts: z.array(AccountYearResultSchema),
   totalAssets: z.number(),
+  totalLiabilities: z.number(),
   totalLiquidAssets: z.number(),
   totalIncome: z.number(),
   totalExpenses: z.number(),

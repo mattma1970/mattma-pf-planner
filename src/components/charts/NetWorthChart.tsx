@@ -118,7 +118,7 @@ export function NetWorthChart({ forecast, events = [], accounts = [], persons = 
 
   const data = forecast.years.map((y) => ({
     year: y.year,
-    netWorth: y.totalAssets,
+    netWorth: y.totalAssets - y.totalLiabilities,
     liquidAssets: y.totalLiquidAssets,
   }));
 

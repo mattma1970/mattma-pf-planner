@@ -300,6 +300,93 @@ The Net Worth and Income/Expense charts provide quick visual summaries.
 Review and update your plan annually with actual figures.
 `,
   },
+  {
+    id: 'faq',
+    title: 'FAQ',
+    keywords: ['faq', 'frequently asked', 'questions', 'how to', 'rollover', 'pension', 'transfer'],
+    content: `
+## Frequently Asked Questions
+
+### How do I transfer super to a pension at retirement?
+
+To model rolling your super (accumulation phase) into a pension (retirement phase):
+
+**1. Set up the Super Account (Accumulation)**
+- **Type**: Asset
+- **Sub-type**: Superannuation
+- **Initial Value**: Your current super balance
+- **End Condition**: Age-based (e.g., age 60 for preservation)
+- **End Behavior**: Transfer
+- **Transfer To**: Your pension account
+
+**2. Set up the Pension Account**
+- **Type**: Asset
+- **Sub-type**: Superannuation
+- **Initial Value**: **$0** (important!)
+- **Start Condition**: Same age as super ends (e.g., age 60)
+- **Funded By**: None (leave empty)
+
+The pension receives its balance from the transfer.
+
+### How do I model selling an investment property?
+
+- **End Condition**: The year you plan to sell
+- **End Behavior**: Sell
+- **Transfer To**: Where proceeds should go (e.g., bank account)
+- **Cost Base**: Original purchase price (for CGT calculation)
+- **Acquisition Year**: When you bought it
+- **Eligible for CGT Discount**: Yes (if held >12 months)
+
+The capital gain will be calculated and added to your taxable income.
+
+### How do I model a mortgage offset account?
+
+Create both the mortgage and the offset account, then link them:
+
+**Mortgage**
+- **Type**: Liability
+- **Offset Account**: Select your offset account
+
+**Offset Account**
+- **Type**: Asset
+- Regular savings/transaction account
+
+Interest is calculated on (mortgage balance - offset balance).
+
+### Why isn't my expense growing with inflation?
+
+Check the expense account's growth profile:
+- **CPI-linked**: Will grow with inflation
+- **Fixed**: Stays at the same dollar amount
+
+For living expenses, use CPI-linked to model real purchasing power.
+
+### How do I add a one-time bonus or inheritance?
+
+Use **Events** for one-time occurrences:
+1. Click **Events** in the toolbar
+2. Add Event with type **Income**
+3. Set the year and amount
+4. Optionally set tax treatment (taxable or tax-free for inheritance)
+
+### Why is my super contribution showing as blocked?
+
+Contributions over the cap are blocked. Check:
+- **Concessional cap**: $30,000/year (plus carry-forward if eligible)
+- **Non-concessional cap**: $120,000/year (or up to $360,000 with bring-forward)
+
+Expand the Off-Balance Sheet section to see cap usage and carry-forward amounts.
+
+### How do I model income from dividends with franking credits?
+
+For a share portfolio with franked dividends:
+- **Return Rate**: Your expected dividend yield
+- **Franking Percentage**: Portion that's franked (e.g., 1.0 for fully franked)
+- **Income Target Account**: Where to deposit the dividend income
+
+Franking credits will be calculated and applied as a tax offset.
+`,
+  },
 ];
 
 interface HelpModalProps {

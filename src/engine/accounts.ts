@@ -100,7 +100,7 @@ export interface TransferResult {
   isTransferYear: boolean;
   amount: number;
   destinationId?: string;
-  endBehavior?: 'transfer' | 'sell';
+  endBehavior?: 'transfer' | 'sell' | 'sellNoCgt';
 }
 
 export function handleAccountTransfer(
@@ -113,7 +113,7 @@ export function handleAccountTransfer(
     return { isTransferYear: false, amount: 0 };
   }
 
-  if (account.endBehavior !== 'transfer' && account.endBehavior !== 'sell') {
+  if (account.endBehavior !== 'transfer' && account.endBehavior !== 'sell' && account.endBehavior !== 'sellNoCgt') {
     return { isTransferYear: false, amount: 0 };
   }
 

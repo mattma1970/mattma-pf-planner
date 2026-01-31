@@ -143,7 +143,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
   const requiresDepositsTo = type === 'income';
   const requiresFundedBy = type === 'expense' || type === 'liability';
   const requiresIncomeTarget = type === 'asset' && returnRate !== '';
-  const requiresTransferTo = endConditionType !== 'none' && (endBehavior === 'transfer' || endBehavior === 'sell');
+  const requiresTransferTo = endConditionType !== 'none' && (endBehavior === 'transfer' || endBehavior === 'sell' || endBehavior === 'sellNoCgt');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -229,7 +229,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       startCondition,
       endCondition,
       endBehavior: endCondition ? endBehavior : undefined,
-      transferToAccountId: (endBehavior === 'transfer' || endBehavior === 'sell') ? transferToAccountId : undefined,
+      transferToAccountId: (endBehavior === 'transfer' || endBehavior === 'sell' || endBehavior === 'sellNoCgt') ? transferToAccountId : undefined,
       depositsToAccountId: type === 'income' && depositsToAccountId ? depositsToAccountId : undefined,
       fundedByAccountId: (type === 'expense' || type === 'asset' || type === 'liability') && fundedByAccountId ? fundedByAccountId : undefined,
       
@@ -830,10 +830,11 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
                 <option value="transfer">Transfer to Account</option>
                 <option value="hold">Hold Value</option>
                 {type === 'asset' && <option value="sell">Sell (triggers CGT)</option>}
+                {type === 'asset' && <option value="sellNoCgt">Sell (no CGT)</option>}
               </Select>
-              {(endBehavior === 'transfer' || endBehavior === 'sell') && (
+              {(endBehavior === 'transfer' || endBehavior === 'sell' || endBehavior === 'sellNoCgt') && (
                 <Select
-                  label={`${endBehavior === 'sell' ? 'Proceeds To' : 'Transfer To'} *`}
+                  label={`${endBehavior === 'sell' || endBehavior === 'sellNoCgt' ? 'Proceeds To' : 'Transfer To'} *`}
                   value={transferToAccountId}
                   onChange={(e) => setTransferToAccountId(e.target.value)}
                 >

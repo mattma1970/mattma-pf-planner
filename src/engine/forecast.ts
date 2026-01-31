@@ -196,7 +196,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       sourceId: string; 
       destinationId: string; 
       amount: number;
-      endBehavior: 'transfer' | 'sell';
+      endBehavior: 'transfer' | 'sell' | 'sellNoCgt';
       account: Account;
     }[] = [];
 
@@ -251,7 +251,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         (lifecycleFlows.get(transfer.destinationId) ?? 0) + transfer.amount
       );
 
-      // Handle CGT for sell behavior
+      // Handle CGT for sell behavior (not for sellNoCgt)
       if (transfer.endBehavior === 'sell') {
         const account = transfer.account;
         const costBase = account.costBase ?? account.initialValue;
@@ -279,23 +279,36 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           personId: account.owner,
           personName: ownerPerson?.name,
         });
-        
-        // Pay off any liabilities linked to this asset
+      }
+      
+      }
+    
+    // Track liability payoffs triggered by asset sales
+    // The payoff will be processed as a normal withdrawal from the liability's fundedByAccountId
+    const liabilityPayoffs = new Map<string, { 
+      amount: number; 
+      fundedByAccountId: string;
+      triggeredByAssetId: string;
+      triggeredByAssetName: string;
+      liabilityName: string;
+    }>();
+    
+    // Identify liabilities to pay off when their linked asset sells (for both 'sell' and 'sellNoCgt')
+    for (const transfer of lifecycleTransfers) {
+      if (transfer.endBehavior === 'sell' || transfer.endBehavior === 'sellNoCgt') {
+        const account = transfer.account;
         for (const liability of accounts) {
           if (liability.type === 'liability' && liability.payoffFromAccountId === account.id) {
             const liabilityBalance = accountValues.get(liability.id) ?? liability.initialValue;
-            if (liabilityBalance > 0) {
-              // Reduce the transfer proceeds by liability amount
-              const payoffAmount = Math.min(liabilityBalance, transfer.amount);
-              lifecycleFlows.set(
-                transfer.destinationId,
-                (lifecycleFlows.get(transfer.destinationId) ?? 0) - payoffAmount
-              );
-              // Mark liability as paid off
-              lifecycleFlows.set(
-                liability.id,
-                (lifecycleFlows.get(liability.id) ?? 0) - liabilityBalance
-              );
+            if (liabilityBalance > 0 && liability.fundedByAccountId) {
+              // Track the payoff - will be processed in Phase 6 as a withdrawal from fundedByAccountId
+              liabilityPayoffs.set(liability.id, {
+                amount: liabilityBalance,
+                fundedByAccountId: liability.fundedByAccountId,
+                triggeredByAssetId: account.id,
+                triggeredByAssetName: account.name,
+                liabilityName: liability.name,
+              });
             }
           }
         }
@@ -577,10 +590,21 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         // PHASE 4: Apply growth (only if balance > 0)
         // Skip growth for liabilities - interest is handled separately in liability processing phase
         if (account.type === 'liability') {
-          // For liabilities, just track the opening balance + any transfers
-          // Interest will be calculated in the liability processing phase
-          projectedValue = openingValue + lifecycleChange + userTransferChange;
-          growth = 0;
+          // For liabilities, check if it will be paid off via asset sale (handled in Phase 6)
+          const payoffInfo = liabilityPayoffs.get(account.id);
+          if (payoffInfo) {
+            // Liability will be paid off from asset sale - skip normal processing
+            // The actual payoff withdrawal is handled in Phase 6
+            projectedValue = openingValue;
+            endValue = openingValue;
+            growth = 0;
+          } else {
+            // Normal liability processing - interest handled in liability phase
+            // For liabilities, transfers TO the account reduce the balance (paying down the loan)
+            // So we subtract userTransferChange instead of adding it
+            projectedValue = openingValue + lifecycleChange - userTransferChange;
+            growth = 0;
+          }
         } else if (account.type === 'expense') {
           // Special handling for expense accounts with balance-based or periodic features
           const accountStartYear = accountStartYears.get(account.id) ?? year;
@@ -685,7 +709,11 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         contributions += eventContributions;
         withdrawals += eventWithdrawals;
 
-        endValue = projectedValue + eventContributions - eventWithdrawals;
+        // Set endValue (unless liability was paid off via asset sale)
+        const wasLiabilityPaidOff = account.type === 'liability' && liabilityPayoffs.has(account.id);
+        if (!wasLiabilityPaidOff) {
+          endValue = projectedValue + eventContributions - eventWithdrawals;
+        }
 
         // PHASE 5: Derived flows
         if (account.type === 'income' && account.depositsToAccountId) {
@@ -864,6 +892,35 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       
       const result = accountResults.get(account.id);
       if (!result) continue;
+      
+      // Check if this liability is being paid off via asset sale
+      const payoffInfo = liabilityPayoffs.get(account.id);
+      if (payoffInfo) {
+        // Liability is being paid off from asset sale
+        // Create a withdrawal from the funding account to pay off the liability
+        const fundingResult = accountResults.get(payoffInfo.fundedByAccountId);
+        if (fundingResult) {
+          fundingResult.withdrawals += payoffInfo.amount;
+          fundingResult.endValue -= payoffInfo.amount;
+          accountValues.set(payoffInfo.fundedByAccountId, fundingResult.endValue);
+          
+          // Track cashflow detail on funding account
+          if (!fundingResult.cashflowDetails) fundingResult.cashflowDetails = [];
+          fundingResult.cashflowDetails.push({
+            description: `Payoff: ${payoffInfo.liabilityName}`,
+            amount: payoffInfo.amount,
+            type: 'withdrawal',
+            sourceAccountId: account.id,
+            sourceAccountName: payoffInfo.liabilityName,
+          });
+        }
+        
+        // Zero out the liability
+        result.withdrawals = payoffInfo.amount;
+        result.endValue = 0;
+        accountValues.set(account.id, 0);
+        continue; // Skip normal liability processing
+      }
       
       // Skip if liability is already paid off
       if (result.endValue <= 0) continue;
@@ -1589,6 +1646,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       year,
       accounts: yearAccounts,
       totalAssets,
+      totalLiabilities,
       totalLiquidAssets,
       totalIncome,
       totalExpenses,

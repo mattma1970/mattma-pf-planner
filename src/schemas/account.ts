@@ -83,7 +83,7 @@ export const AccountConditionSchema = z.discriminatedUnion('type', [
 ]);
 export type AccountCondition = z.infer<typeof AccountConditionSchema>;
 
-export const EndBehaviorSchema = z.enum(['zero', 'transfer', 'hold', 'sell']);
+export const EndBehaviorSchema = z.enum(['zero', 'transfer', 'hold', 'sell', 'sellNoCgt']);
 export type EndBehavior = z.infer<typeof EndBehaviorSchema>;
 
 export const IncomeTaxTreatmentSchema = z.enum(['taxable', 'taxFree']);

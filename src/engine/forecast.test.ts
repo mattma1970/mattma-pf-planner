@@ -286,6 +286,59 @@ describe('calculateForecast', () => {
       expect(house2026!.endValue).toBe(500000 * 1.05);
     });
 
+    it('transfer to liability reduces the liability balance', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-2222-2222-2222-222222222222',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const mortgage = createTestAccount({
+        id: 'mort-2222-2222-2222-222222222222',
+        name: 'Mortgage',
+        type: 'liability',
+        initialValue: 200000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0,
+        paymentType: 'interestOnly',
+        fundedByAccountId: bankAccount.id,
+      });
+
+      const payDownEvent: Event = {
+        id: 'event-2222-2222-2222-222222222222',
+        year: 2025,
+        type: 'transfer',
+        description: 'Extra mortgage payment',
+        amount: 50000,
+        sourceAccountId: bankAccount.id,
+        targetAccountId: mortgage.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, mortgage],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [payDownEvent],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      const mortResult = result.years[0].accounts.find(a => a.accountId === mortgage.id)!;
+
+      // Bank should have withdrawn 50000
+      expect(bankResult.transfers).toBe(-50000);
+      expect(bankResult.endValue).toBe(50000);
+
+      // Mortgage should be reduced by 50000 (transfer TO liability reduces balance)
+      expect(mortResult.transfers).toBe(50000);
+      expect(mortResult.endValue).toBe(150000);
+    });
+
     it('respects age-based end condition', () => {
       const superAccount = createTestAccount({
         id: 'super-1111-1111-1111-111111111111',
@@ -1045,6 +1098,166 @@ describe('calculateForecast', () => {
       expect(loanResult.endValue).toBeLessThanOrEqual(0);
       
       expect(bankResult.endValue).toBeGreaterThan(400000);
+    });
+
+    it('pays off liability when linked asset sells with no CGT', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-6666-6666-6666-666666666666',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 10000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const car = createTestAccount({
+        id: 'car-6666-6666-6666-666666666666',
+        name: 'Car',
+        type: 'asset',
+        initialValue: 30000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sellNoCgt',
+        transferToAccountId: bankAccount.id,
+      });
+
+      const carLoan = createTestAccount({
+        id: 'loan-6666-6666-6666-666666666666',
+        name: 'Car Loan',
+        type: 'liability',
+        initialValue: 15000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0.08,
+        paymentType: 'interestOnly',
+        fundedByAccountId: bankAccount.id,
+        payoffFromAccountId: car.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, car, carLoan],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      const carResult = result.years[0].accounts.find(a => a.accountId === car.id)!;
+      const loanResult = result.years[0].accounts.find(a => a.accountId === carLoan.id)!;
+      
+      // Loan should be paid off
+      expect(loanResult.endValue).toBeLessThanOrEqual(0);
+      
+      // Car should be sold (value = 0)
+      expect(carResult.endValue).toBe(0);
+      
+      // Bank should have: 10000 (initial) + 30000 (car sale) - 15000 (loan payoff) - 1200 (interest) = 23800
+      // But we expect it to be around 25000 (10000 + 30000 - 15000) give or take interest
+      expect(bankResult.endValue).toBeGreaterThan(20000);
+      expect(bankResult.endValue).toBeLessThan(30000);
+      
+      // No CGT events should be created
+      expect(result.years[0].taxEvents.filter(e => e.type === 'capitalGainsTax')).toHaveLength(0);
+    });
+
+    it('sellNoCgt does not create capital gains tax event', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-7777-7777-7777-777777777777',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 10000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const asset = createTestAccount({
+        id: 'asset-7777-7777-7777-777777777777',
+        name: 'Personal Asset',
+        type: 'asset',
+        initialValue: 50000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sellNoCgt',
+        transferToAccountId: bankAccount.id,
+        costBase: 20000, // Would have large gain if CGT applied
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, asset],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      // No CGT events
+      const cgtEvents = result.years[0].taxEvents.filter(e => e.type === 'capitalGainsTax');
+      expect(cgtEvents).toHaveLength(0);
+      
+      // Bank should have full proceeds (no tax withholding)
+      const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      expect(bankResult.endValue).toBe(60000); // 10000 + 50000
+    });
+
+    it('records liability payoff as a cashflow detail on the destination account', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-8888-8888-8888-888888888888',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 10000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const car = createTestAccount({
+        id: 'car-8888-8888-8888-888888888888',
+        name: 'Car',
+        type: 'asset',
+        initialValue: 30000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sellNoCgt',
+        transferToAccountId: bankAccount.id,
+      });
+
+      const carLoan = createTestAccount({
+        id: 'loan-8888-8888-8888-888888888888',
+        name: 'Car Loan',
+        type: 'liability',
+        initialValue: 15000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0,
+        paymentType: 'interestOnly',
+        fundedByAccountId: bankAccount.id,
+        payoffFromAccountId: car.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, car, carLoan],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      
+      // Bank should have cashflow details including the loan payoff
+      expect(bankResult.cashflowDetails).toBeDefined();
+      const payoffDetail = bankResult.cashflowDetails?.find(d => d.description.includes('Payoff'));
+      expect(payoffDetail).toBeDefined();
+      expect(payoffDetail?.amount).toBe(15000);
+      expect(payoffDetail?.type).toBe('withdrawal');
+      expect(payoffDetail?.sourceAccountName).toBe('Car Loan');
+      
+      // Bank end value should reflect: 10000 (initial) + 30000 (car) - 15000 (loan payoff) = 25000
+      expect(bankResult.endValue).toBe(25000);
     });
 
     it('auto-calculates payment to pay off by end date', () => {
