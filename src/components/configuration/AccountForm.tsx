@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { Button, Input, Select } from '../ui';
-import type { Account, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType, AssetSubType, SuperPhase } from '../../schemas/account';
+import type { Account, AccountInput, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType, AssetSubType, SuperPhase } from '../../schemas/account';
 import type { Person } from '../../schemas/person';
 import type { Settings } from '../../schemas/settings';
 
@@ -9,11 +9,18 @@ interface AccountFormProps {
   accounts: Account[];
   persons: Person[];
   settings?: Settings;
-  onSubmit: (data: Omit<Account, 'id'>) => void;
+  onSubmit: (data: Omit<AccountInput, 'id'>) => void;
   onCancel: () => void;
 }
 
+// Check if an account is a tax/off-balance sheet account
+function isTaxAccount(account?: Account): boolean {
+  return account?.category !== undefined && account.category !== 'standard';
+}
+
 export function AccountForm({ account, accounts, persons, settings, onSubmit, onCancel }: AccountFormProps) {
+  // If this is a tax account, show a simplified form
+  const isTax = isTaxAccount(account);
   const [name, setName] = useState(account?.name ?? '');
   const [type, setType] = useState(account?.type ?? 'income');
   const [initialValue, setInitialValue] = useState(account?.initialValue?.toString() ?? '0');
@@ -268,6 +275,83 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
         : undefined,
     });
   };
+
+  // Simplified submit handler for tax accounts
+  const handleTaxAccountSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Tax accounts keep most of their existing values, only update editable fields
+    onSubmit({
+      name,
+      type: account?.type ?? 'asset',
+      category: account?.category,
+      includeInNetWorth: false,
+      specialConfig: account?.specialConfig,
+      owner: owner || undefined,
+      initialValue: parseFloat(initialValue) || 0,
+      growthProfile: { type: 'fixed', rate: 0 },
+    });
+  };
+
+  // Simplified form for tax/off-balance sheet accounts
+  if (isTax) {
+    const categoryLabels: Record<string, string> = {
+      taxCap: 'Tax Cap Account',
+      taxCarryForward: 'Tax Carry-Forward Account',
+      taxLoss: 'Tax Loss Account',
+      capitalLoss: 'Capital Loss Account',
+      hecsDebt: 'HECS Debt Account',
+      cgtDiscountTracker: 'CGT Discount Tracker',
+    };
+    
+    return (
+      <form onSubmit={handleTaxAccountSubmit} className="space-y-4">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+          <p className="text-sm text-blue-800">
+            <strong>{categoryLabels[account?.category ?? ''] || 'Tax Account'}</strong>
+            <br />
+            This is an automatically managed tax tracking account. Only the name, owner, and opening balance can be edited.
+          </p>
+        </div>
+        
+        <Input
+          label="Account Name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+        />
+
+        <Select
+          label="Owner"
+          value={owner}
+          onChange={(e) => setOwner(e.target.value)}
+        >
+          <option value="">No owner</option>
+          {persons.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </Select>
+
+        <Input
+          label="Opening Balance"
+          type="number"
+          value={initialValue}
+          onChange={(e) => setInitialValue(e.target.value)}
+          placeholder="0"
+        />
+        <p className="text-xs text-gray-500 -mt-3">
+          The balance at the start of the forecast. For carry-forward accounts, this is the total available cap.
+        </p>
+
+        <div className="flex justify-end gap-2 pt-4">
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit">Save</Button>
+        </div>
+      </form>
+    );
+  }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">

@@ -1,16 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { isAccountActive, projectAccountValue, handleAccountTransfer } from './accounts';
-import type { Account, ResolvedAssumptions } from '../schemas';
-import { samplePersons, sampleResolvedAssumptions } from '../test/fixtures';
+import type { ResolvedAssumptions } from '../schemas';
+import { createTestAccount, samplePersons, sampleResolvedAssumptions } from '../test/fixtures';
 
 describe('isAccountActive', () => {
-  const baseAccount: Account = {
+  const baseAccount = createTestAccount({
     id: 'test1111-1111-1111-1111-111111111111',
     name: 'Test Account',
     type: 'asset',
     initialValue: 10000,
     growthProfile: { type: 'fixed', rate: 0.03 },
-  };
+  });
 
   it('returns true when no conditions are set (always active)', () => {
     expect(isAccountActive(baseAccount, 2024, [])).toBe(true);
@@ -18,20 +18,20 @@ describe('isAccountActive', () => {
   });
 
   it('respects year-based startCondition', () => {
-    const account: Account = {
+    const account = createTestAccount({
       ...baseAccount,
       startCondition: { type: 'year', year: 2025 },
-    };
+    });
     expect(isAccountActive(account, 2024, [])).toBe(false);
     expect(isAccountActive(account, 2025, [])).toBe(true);
     expect(isAccountActive(account, 2026, [])).toBe(true);
   });
 
   it('respects year-based endCondition', () => {
-    const account: Account = {
+    const account = createTestAccount({
       ...baseAccount,
       endCondition: { type: 'year', year: 2030 },
-    };
+    });
     expect(isAccountActive(account, 2029, [])).toBe(true);
     expect(isAccountActive(account, 2030, [])).toBe(true);
     expect(isAccountActive(account, 2031, [])).toBe(false);
@@ -39,12 +39,12 @@ describe('isAccountActive', () => {
 
   it('respects age-based conditions with person birthYear', () => {
     const alice = samplePersons[0];
-    const account: Account = {
+    const account = createTestAccount({
       ...baseAccount,
       owner: alice.id,
       startCondition: { type: 'age', personId: alice.id, age: 60 },
       endCondition: { type: 'age', personId: alice.id, age: 70 },
-    };
+    });
 
     const startYear = alice.birthYear + 60;
     const endYear = alice.birthYear + 70;
@@ -60,26 +60,26 @@ describe('projectAccountValue', () => {
   const assumptions: ResolvedAssumptions = sampleResolvedAssumptions;
 
   it('applies fixed growth rate correctly', () => {
-    const account: Account = {
+    const account = createTestAccount({
       id: 'test2222-2222-2222-2222-222222222222',
       name: 'Fixed Growth Account',
       type: 'asset',
       initialValue: 100000,
       growthProfile: { type: 'fixed', rate: 0.05 },
-    };
+    });
 
     const result = projectAccountValue(account, 2024, 100000, assumptions, 1);
     expect(result).toBe(105000);
   });
 
   it('applies cpiLinked growth with add operation', () => {
-    const account: Account = {
+    const account = createTestAccount({
       id: 'test3333-3333-3333-3333-333333333333',
       name: 'CPI Linked Account',
       type: 'expense',
       initialValue: 50000,
       growthProfile: { type: 'cpiLinked', operation: 'add', value: 0.01 },
-    };
+    });
 
     const expectedRate = assumptions.cpi + 0.01;
     const result = projectAccountValue(account, 2024, 50000, assumptions, 1);
@@ -87,13 +87,13 @@ describe('projectAccountValue', () => {
   });
 
   it('applies cpiLinked growth with subtract operation', () => {
-    const account: Account = {
+    const account = createTestAccount({
       id: 'test3333-3333-3333-3333-333333333334',
       name: 'CPI Linked Subtract',
       type: 'expense',
       initialValue: 50000,
       growthProfile: { type: 'cpiLinked', operation: 'subtract', value: 0.01 },
-    };
+    });
 
     const expectedRate = assumptions.cpi - 0.01;
     const result = projectAccountValue(account, 2024, 50000, assumptions, 1);
@@ -101,13 +101,13 @@ describe('projectAccountValue', () => {
   });
 
   it('applies cpiLinked growth with multiply operation', () => {
-    const account: Account = {
+    const account = createTestAccount({
       id: 'test3333-3333-3333-3333-333333333335',
       name: 'CPI Linked Multiply',
       type: 'expense',
       initialValue: 50000,
       growthProfile: { type: 'cpiLinked', operation: 'multiply', value: 0.5 },
-    };
+    });
 
     const expectedRate = assumptions.cpi * 0.5;
     const result = projectAccountValue(account, 2024, 50000, assumptions, 1);
@@ -115,13 +115,13 @@ describe('projectAccountValue', () => {
   });
 
   it('applies increasing growth rate over time', () => {
-    const account: Account = {
+    const account = createTestAccount({
       id: 'test4444-4444-4444-4444-444444444444',
       name: 'Increasing Growth Account',
       type: 'asset',
       initialValue: 100000,
       growthProfile: { type: 'increasing', rate: 0.05, changePerYear: 0.01 },
-    };
+    });
 
     const year1 = projectAccountValue(account, 2024, 100000, assumptions, 1);
     expect(year1).toBe(100000 * (1 + 0.05));
@@ -132,13 +132,13 @@ describe('projectAccountValue', () => {
   });
 
   it('applies decreasing growth rate over time, flooring at 0', () => {
-    const account: Account = {
+    const account = createTestAccount({
       id: 'test5555-5555-5555-5555-555555555555',
       name: 'Decreasing Growth Account',
       type: 'asset',
       initialValue: 100000,
       growthProfile: { type: 'decreasing', rate: 0.03, changePerYear: 0.01 },
-    };
+    });
 
     const year1 = projectAccountValue(account, 2024, 100000, assumptions, 1);
     expect(year1).toBe(100000 * (1 + 0.03));
@@ -155,7 +155,7 @@ describe('projectAccountValue', () => {
 describe('handleAccountTransfer', () => {
   const alice = samplePersons[0];
 
-  const accountWithTransfer: Account = {
+  const accountWithTransfer = createTestAccount({
     id: 'test6666-6666-6666-6666-666666666666',
     name: 'Transfer Account',
     type: 'asset',
@@ -165,7 +165,7 @@ describe('handleAccountTransfer', () => {
     endCondition: { type: 'year', year: 2030 },
     endBehavior: 'transfer',
     transferToAccountId: 'dest1111-1111-1111-1111-111111111111',
-  };
+  });
 
   it('returns isTransferYear: false when not transfer year', () => {
     const result = handleAccountTransfer(accountWithTransfer, 2029, samplePersons, 150000);
@@ -187,7 +187,7 @@ describe('handleAccountTransfer', () => {
   });
 
   it('returns no transfer when account has no endBehavior set to transfer', () => {
-    const accountNoTransfer: Account = {
+    const accountNoTransfer = createTestAccount({
       id: 'test7777-7777-7777-7777-777777777777',
       name: 'No Transfer Account',
       type: 'asset',
@@ -195,7 +195,7 @@ describe('handleAccountTransfer', () => {
       growthProfile: { type: 'fixed', rate: 0.03 },
       endCondition: { type: 'year', year: 2030 },
       endBehavior: 'zero',
-    };
+    });
 
     const result = handleAccountTransfer(accountNoTransfer, 2030, samplePersons, 100000);
     expect(result.isTransferYear).toBe(false);

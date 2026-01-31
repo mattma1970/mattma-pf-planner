@@ -17,8 +17,7 @@ export const SuperContributionSourceSchema = z.enum([
   'employerSG',           // Employer Super Guarantee (mandatory)
   'employerAdditional',   // Employer contributions above SG
   'salarySacrifice',      // Pre-tax salary sacrifice
-  'personalDeductible',   // Personal contributions claiming tax deduction
-  'personalAfterTax',     // Personal after-tax contributions (non-concessional)
+  'personal',             // Personal contributions (after-tax money, use contributionType + reducesAssessableIncome to control tax treatment)
   'spouseContribution',   // Contributions from spouse
   'governmentCoContribution', // Government co-contribution
   'downsizer',            // Downsizer contribution (from home sale, cap-exempt)

@@ -4,6 +4,52 @@ import { TaxClassificationSchema } from './tax';
 export const AccountTypeSchema = z.enum(['income', 'expense', 'asset', 'liability']);
 export type AccountType = z.infer<typeof AccountTypeSchema>;
 
+// Account category - distinguishes standard financial accounts from tax/off-balance sheet trackers
+export const AccountCategorySchema = z.enum([
+  'standard',           // Normal financial accounts (bank, super, shares, etc.)
+  'taxCap',             // Tax cap trackers (non-concessional cap, franking credits)
+  'taxCarryForward',    // Carry-forward trackers (concessional carry-forward)
+  'taxLoss',            // Income tax loss carry-forward (future)
+  'capitalLoss',        // Capital loss carry-forward (future)
+  'hecsDebt',           // HECS/HELP debt tracking (future)
+  'cgtDiscountTracker', // CGT discount tracking (future)
+]);
+export type AccountCategory = z.infer<typeof AccountCategorySchema>;
+
+// Special configuration for tax/off-balance sheet accounts
+export const ConcessionalCarryForwardConfigSchema = z.object({
+  kind: z.literal('concessionalCarryForward'),
+  // Per-year buckets of unused cap (oldest first, for FIFO consumption)
+  buckets: z.array(z.object({
+    year: z.number().int(),
+    amount: z.number(),
+  })).default([]),
+  // Override global carry-forward years if needed
+  carryForwardYears: z.number().int().optional(),
+});
+export type ConcessionalCarryForwardConfig = z.infer<typeof ConcessionalCarryForwardConfigSchema>;
+
+export const NonConcessionalCapConfigSchema = z.object({
+  kind: z.literal('nonConcessionalCap'),
+  // Prior year's closing balance (determines bring-forward availability)
+  priorClosingBalance: z.number().default(0),
+});
+export type NonConcessionalCapConfig = z.infer<typeof NonConcessionalCapConfigSchema>;
+
+export const FrankingCreditsConfigSchema = z.object({
+  kind: z.literal('frankingCredits'),
+  // No special config needed for now - just tracks accumulated franking credits
+});
+export type FrankingCreditsConfig = z.infer<typeof FrankingCreditsConfigSchema>;
+
+// Discriminated union for category-specific configuration
+export const SpecialConfigSchema = z.discriminatedUnion('kind', [
+  ConcessionalCarryForwardConfigSchema,
+  NonConcessionalCapConfigSchema,
+  FrankingCreditsConfigSchema,
+]);
+export type SpecialConfig = z.infer<typeof SpecialConfigSchema>;
+
 export const AssetSubTypeSchema = z.enum(['generic', 'superannuation']);
 export type AssetSubType = z.infer<typeof AssetSubTypeSchema>;
 
@@ -61,6 +107,17 @@ export const AccountSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1),
   type: AccountTypeSchema,
+  
+  // Category for distinguishing standard accounts from tax/off-balance sheet trackers
+  category: AccountCategorySchema.optional().default('standard'),
+  
+  // Whether this account's balance contributes to net worth calculations
+  // Set to false for tax cap/carry-forward accounts
+  includeInNetWorth: z.boolean().optional().default(true),
+  
+  // Category-specific configuration (for tax/off-balance sheet accounts)
+  specialConfig: SpecialConfigSchema.optional(),
+  
   assetSubType: AssetSubTypeSchema.optional(),
   superConfig: SuperAccountConfigSchema.optional(),
   owner: z.string().optional(),
@@ -112,3 +169,6 @@ export const AccountSchema = z.object({
   payoffFromAccountId: z.string().uuid().optional(), // Pay off when this asset sells
 });
 export type Account = z.infer<typeof AccountSchema>;
+
+// Input type for creating/updating accounts - allows optional fields that have defaults
+export type AccountInput = z.input<typeof AccountSchema>;

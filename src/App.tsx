@@ -5,7 +5,7 @@ import { NetWorthChart, IncomeExpenseChart } from './components/charts';
 import { AccountModal, EpochAssumptionsMatrix, EventModal } from './components/configuration';
 import { Header } from './components/Header';
 import { Modal, Button } from './components/ui';
-import type { Account } from './schemas/account';
+import type { Account, AccountInput } from './schemas/account';
 import type { Event } from './schemas/event';
 import type { Epoch } from './schemas/epoch';
 import type { Assumptions } from './schemas/assumption';
@@ -60,7 +60,7 @@ function App() {
     setAccountModalOpen(true);
   };
 
-  const handleSaveAccount = async (data: Omit<Account, 'id'>) => {
+  const handleSaveAccount = async (data: Omit<AccountInput, 'id'>) => {
     if (editingAccount) {
       await updateAccount(editingAccount.id, data as never);
     } else {
@@ -179,7 +179,7 @@ function App() {
         accounts={accounts as unknown as Account[]}
         persons={persons}
         settings={settings}
-        onSubmit={handleSaveAccount as (data: Omit<Account, 'id'>) => void}
+        onSubmit={handleSaveAccount}
       />
       <Modal isOpen={showEpochs} onClose={() => setShowEpochs(false)} title="Epochs & Assumptions" size="xl">
         {assumptions && (
@@ -287,7 +287,18 @@ function App() {
                       />
                       <button
                         type="button"
-                        onClick={() => setEditingPersonId(null)}
+                        onClick={(e) => {
+                          const container = e.currentTarget.closest('[data-person-edit]');
+                          const nameInput = container?.querySelector('input[type="text"]') as HTMLInputElement | null;
+                          const birthYearInput = container?.querySelector('input[type="number"]') as HTMLInputElement | null;
+                          if (nameInput) {
+                            updatePerson(person.id, { 
+                              name: nameInput.value,
+                              birthYear: birthYearInput ? parseInt(birthYearInput.value) || person.birthYear : person.birthYear
+                            });
+                          }
+                          setEditingPersonId(null);
+                        }}
                         className="text-blue-600 hover:text-blue-800 text-xs"
                       >
                         Done

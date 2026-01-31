@@ -11,6 +11,7 @@ export function usePersons() {
     try {
       setLoading(true);
       const data = await personActions.getPersons();
+      // Note: Tax account migration is now done in useAccounts to ensure proper load order
       setPersons(data);
       setError(null);
     } catch (e) {

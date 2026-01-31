@@ -15,17 +15,21 @@ import type {
   TaxSchedule,
   OffBalanceSheetItem,
   TaxByPerson,
+  ForecastWarning,
 } from '../schemas';
 import { calculateIncomeTax, calculateCapitalGain, type CgtCalculationResult } from './tax';
 import { resolveAssumptionForYear } from './assumptions';
 import { isAccountActive, projectAccountValue, handleAccountTransfer, getAccountAcquisitionYear } from './accounts';
 import {
-  initializeCarryForwardStates,
-  initializeNonConcessionalCapStates,
+  initializeCarryForwardStatesFromAccounts,
+  initializeNonConcessionalCapStatesFromAccounts,
   aggregateContributionsByPerson,
   processPersonContributions,
   createCapAccountOffBalanceSheetItems,
+  createTaxAccountYearResults,
+  createFrankingCreditsYearResult,
   getContributionTaxCategory,
+  isCapExempt,
   type CarryForwardState,
   type NonConcessionalCapState,
   type ContributionProcessingResult,
@@ -143,13 +147,16 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
   let peakAssetsYear = startYear;
   
   // Initialize carry-forward state for super contributions (concessional)
-  let carryForwardStates = initializeCarryForwardStates(persons);
+  // Now reads opening balances from tax accounts if they exist
+  let carryForwardStates = initializeCarryForwardStatesFromAccounts(persons, accounts, startYear, settings.super);
   // Initialize non-concessional cap state (bring-forward tracking)
-  let nonConcessionalCapStates = initializeNonConcessionalCapStates(persons);
+  // Now reads opening balances from tax accounts if they exist
+  let nonConcessionalCapStates = initializeNonConcessionalCapStatesFromAccounts(persons, accounts);
 
   for (let year = startYear; year <= endYear; year++) {
     const resolvedAssumptions = resolveAssumptions(assumptions, year, sortedEpochs);
     const yearAccounts: AccountYearResult[] = [];
+    const yearWarnings: ForecastWarning[] = [];
     let totalIncome = 0;
     let totalExpenses = 0;
 
@@ -159,6 +166,9 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     
     // Track per-account income for itemized tax events
     const incomeByAccount: { accountId: string; accountName: string; amount: number; fundedFromAccountId?: string; personId?: string; personName?: string }[] = [];
+    
+    // Track income by person for Div 293 calculation
+    const incomeByPerson = new Map<string, number>();
     
     // Track franking credits generated for the year, per person (by asset owner)
     const frankingCreditsByPerson = new Map<string, number>();
@@ -303,12 +313,103 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     const superContributionsByAccount = new Map<string, { 
       concessional: number; 
       nonConcessional: number; 
-      incomeReduction: number;
+      preTaxReduction: number;   // Salary sacrifice - excess is added back to income
+      postTaxDeduction: number;  // Personal deductible - only cap amount is deductible
       personId: string;
     }>();
     
     // Track super contribution flows separately from transfers (for proper reporting as contributions)
     const superContributionFlows = new Map<string, number>(); // accountId -> contribution amount
+    
+    // Pre-calculate blocked/excess contributions per person
+    // This allows us to adjust flows when contributions can't be made
+    // - blockedNonConcessional: when non-conc opening cap <= 0, contributions are blocked
+    // - excessNonConcessional: when contributions exceed 3-year bring-forward limit
+    // Note: blocked/excess includes BOTH explicit non-concessional AND excess from concessional
+    const contributionCapResultsByPerson = new Map<string, {
+      // For non-concessional contributions
+      unallowedNonConcessional: number;
+      totalRequestedNonConcessional: number;
+      // For concessional contributions (excess that flows to non-concessional)
+      excessConcessional: number;
+      blockedExcessConcessional: number;
+      totalRequestedConcessional: number;
+    }>();
+    if (persons.length > 0 && settings.super) {
+      const contributionsByPerson = aggregateContributionsByPerson(events, year, persons, accounts);
+      
+      for (const person of persons) {
+        const personContribs = contributionsByPerson.get(person.id);
+        const currentCarryForwardState = carryForwardStates.get(person.id) ?? { 
+          personId: person.id, 
+          unusedCaps: [] 
+        };
+        const currentNonConcCapState = nonConcessionalCapStates.get(person.id) ?? {
+          personId: person.id,
+          closingBalance: 0,
+        };
+        
+        const result = processPersonContributions(
+          person.id,
+          year,
+          personContribs?.concessional ?? 0,
+          personContribs?.nonConcessional ?? 0,
+          currentCarryForwardState,
+          currentNonConcCapState,
+          settings.super
+        );
+        
+        // Total blocked/excess for non-concessional cap
+        const totalUnallowed = result.blockedNonConcessional + result.excessNonConcessional;
+        
+        // Calculate how much of the blocked/excess applies to each source:
+        // - Explicit non-concessional contributions
+        // - Excess from concessional contributions
+        // The blocking is applied proportionally based on what contributed to the cap usage
+        const totalForNonConcCap = (personContribs?.nonConcessional ?? 0) + result.excessConcessional;
+        
+        let unallowedNonConcessional = 0;
+        let blockedExcessConcessional = 0;
+        
+        if (totalUnallowed > 0 && totalForNonConcCap > 0) {
+          // Pro-rate the blocked amount between explicit non-conc and excess concessional
+          const nonConcRatio = (personContribs?.nonConcessional ?? 0) / totalForNonConcCap;
+          const excessConcRatio = result.excessConcessional / totalForNonConcCap;
+          
+          unallowedNonConcessional = totalUnallowed * nonConcRatio;
+          blockedExcessConcessional = totalUnallowed * excessConcRatio;
+        }
+        
+        contributionCapResultsByPerson.set(person.id, {
+          unallowedNonConcessional,
+          totalRequestedNonConcessional: personContribs?.nonConcessional ?? 0,
+          excessConcessional: result.excessConcessional,
+          blockedExcessConcessional,
+          totalRequestedConcessional: personContribs?.concessional ?? 0,
+        });
+        
+        // Generate consolidated warnings for blocked contributions (per person)
+        const totalBlocked = unallowedNonConcessional + blockedExcessConcessional;
+        if (totalBlocked > 0) {
+          const parts: string[] = [];
+          if (unallowedNonConcessional > 0) {
+            parts.push(`$${Math.round(unallowedNonConcessional).toLocaleString()} non-concessional`);
+          }
+          if (blockedExcessConcessional > 0) {
+            parts.push(`$${Math.round(blockedExcessConcessional).toLocaleString()} excess concessional`);
+          }
+          
+          yearWarnings.push({
+            type: 'blockedContribution',
+            severity: 'warning',
+            message: `Super contribution blocked for ${person.name}`,
+            details: `${parts.join(' and ')} blocked - non-concessional cap exhausted`,
+            personId: person.id,
+            amount: totalBlocked,
+          });
+        }
+      }
+    }
     
     for (const event of yearEvents) {
       if (event.type === 'transfer' && event.sourceAccountId && event.targetAccountId) {
@@ -339,43 +440,81 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       
       // Handle super contribution events
       if (event.type === 'superContribution' && event.superContribution && event.targetAccountId) {
-        const { contributionType, memberPersonId, reducesAssessableIncome } = event.superContribution;
+        const { contributionType, memberPersonId, reducesAssessableIncome, source } = event.superContribution;
+        const exemptFromCap = event.superContribution.exemptFromCap ?? isCapExempt(contributionType);
         
         // Derive personId from the super account's owner, fallback to memberPersonId
         const targetAccount = accounts.find(a => a.id === event.targetAccountId);
         const personId = targetAccount?.owner || memberPersonId;
         
+        // Map contribution types (including cap-exempt types) to concessional/nonConcessional
+        const taxCategory = getContributionTaxCategory(contributionType);
+        
+        // Calculate effective contribution amount (may be reduced if blocked/excess by cap)
+        let effectiveAmount = event.amount;
+        
+        if (!exemptFromCap && personId) {
+          const capResult = contributionCapResultsByPerson.get(personId);
+          
+          if (capResult) {
+            if (taxCategory === 'nonConcessional') {
+              // Direct non-concessional: apply blocking based on non-concessional cap
+              if (capResult.unallowedNonConcessional > 0 && capResult.totalRequestedNonConcessional > 0) {
+                const unallowedRatio = capResult.unallowedNonConcessional / capResult.totalRequestedNonConcessional;
+                const unallowedForThisEvent = event.amount * unallowedRatio;
+                effectiveAmount = event.amount - unallowedForThisEvent;
+              }
+            } else if (taxCategory === 'concessional') {
+              // Concessional: the excess portion flows to non-concessional cap
+              // If that excess is blocked, reduce the effective amount
+              if (capResult.blockedExcessConcessional > 0 && capResult.totalRequestedConcessional > 0) {
+                // Pro-rate the blocked excess across all concessional contributions
+                const blockedRatio = capResult.blockedExcessConcessional / capResult.totalRequestedConcessional;
+                const blockedForThisEvent = event.amount * blockedRatio;
+                effectiveAmount = event.amount - blockedForThisEvent;
+              }
+            }
+          }
+        }
+        
         // Track contribution to target super account separately (not as a transfer)
         superContributionFlows.set(
           event.targetAccountId,
-          (superContributionFlows.get(event.targetAccountId) ?? 0) + event.amount
+          (superContributionFlows.get(event.targetAccountId) ?? 0) + effectiveAmount
         );
         
         // If there's a source account (salary sacrifice, personal contribution), deduct as transfer
+        // Only deduct the effective amount (not the blocked portion)
         if (event.sourceAccountId) {
           userTransferFlows.set(
             event.sourceAccountId,
-            (userTransferFlows.get(event.sourceAccountId) ?? 0) - event.amount
+            (userTransferFlows.get(event.sourceAccountId) ?? 0) - effectiveAmount
           );
         }
         
         // Track contributions by super account for tax calculations
-        // Map contribution types (including cap-exempt types) to concessional/nonConcessional
-        const taxCategory = getContributionTaxCategory(contributionType);
         const existing = superContributionsByAccount.get(event.targetAccountId) ?? { 
           concessional: 0, 
           nonConcessional: 0, 
-          incomeReduction: 0,
+          preTaxReduction: 0,    // Salary sacrifice - excess is added back to income
+          postTaxDeduction: 0,   // Personal deductible - only cap amount is deductible
           personId 
         };
         if (taxCategory === 'concessional') {
           existing.concessional += event.amount;
-          // Track income reduction for salary sacrifice / personal deductible
+          // Track income reduction separately for pre-tax vs post-tax contributions
           if (reducesAssessableIncome) {
-            existing.incomeReduction += event.amount;
+            if (source === 'salarySacrifice') {
+              // Pre-tax: salary sacrifice already reduced gross income
+              existing.preTaxReduction += event.amount;
+            } else {
+              // Post-tax: personal deductible or any other source with reducesAssessableIncome
+              // (includes personal contributions when marked as concessional)
+              existing.postTaxDeduction += event.amount;
+            }
           }
         } else {
-          existing.nonConcessional += event.amount;
+          existing.nonConcessional += effectiveAmount;
         }
         superContributionsByAccount.set(event.targetAccountId, existing);
       }
@@ -648,6 +787,10 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             personId: account.owner,
             personName: ownerPerson?.name,
           });
+          // Track income by person for Div 293 calculation
+          if (account.owner) {
+            incomeByPerson.set(account.owner, (incomeByPerson.get(account.owner) ?? 0) + taxableIncome);
+          }
         }
         // Income accounts show total income for the year as endValue
         endValue = taxableIncome;
@@ -863,8 +1006,17 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
 
     // Generate tax events from events with taxTreatmentType
     // Note: Skip super contribution events as they're handled separately in the super contribution tax section
+    // Also skip events that target income/expense accounts as those accounts already handle tax treatment
     for (const event of yearEvents) {
       if (event.type === 'superContribution') continue;
+      
+      // Skip events targeting income/expense accounts - they're already taxed via the account
+      if (event.affectedAccountId) {
+        const affectedAccount = accounts.find(a => a.id === event.affectedAccountId);
+        if (affectedAccount && (affectedAccount.type === 'income' || affectedAccount.type === 'expense')) {
+          continue;
+        }
+      }
       
       if (event.taxTreatmentType === 'taxable' && event.amount > 0) {
         const fundingAccountId = event.taxFundedFromAccountId ?? defaultFundingAccountId;
@@ -1004,12 +1156,21 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           });
         }
         
-        // Add tax deduction for salary sacrifice / personal deductible contributions
-        if (contribs.incomeReduction > 0) {
-          const contribPerson = persons.find(p => p.id === contribs.personId);
-          const fundingAccountId = superAccount.taxFundedFromAccountId ?? settings.defaultTaxFundingAccountId ?? 'unassigned';
-          const fundingAccount = accounts.find(a => a.id === fundingAccountId);
-          
+        // Handle tax events for salary sacrifice and personal deductible contributions
+        // These have DIFFERENT tax treatments:
+        // - Salary sacrifice (pre-tax): Full amount reduces income, excess over cap is ADDED BACK
+        // - Personal deductible (post-tax): Only amount within cap is deductible
+        
+        const contribPerson = persons.find(p => p.id === contribs.personId);
+        const fundingAccountId = superAccount.taxFundedFromAccountId ?? settings.defaultTaxFundingAccountId ?? 'unassigned';
+        const fundingAccount = accounts.find(a => a.id === fundingAccountId);
+        const concessionalWithinCap = result.concessionalContributions - result.excessConcessional;
+        
+        // SALARY SACRIFICE (pre-tax): The full amount already reduced gross income
+        // If there's excess over cap, we need to ADD IT BACK to assessable income
+        if (contribs.preTaxReduction > 0) {
+          // First, create a deduction for the full salary sacrifice amount
+          // (This represents the income reduction that already happened at source)
           taxEvents.push({
             id: uuidv4(),
             year,
@@ -1017,18 +1178,67 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             description: `Salary Sacrifice: ${superAccount.name}`,
             sourceAccountId: superAccountId,
             sourceAccountName: superAccount.name,
-            assessableAmount: -contribs.incomeReduction, // Negative to reduce taxable income
+            assessableAmount: -contribs.preTaxReduction,
             fundedFromAccountId: fundingAccountId,
             fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
             personId: contribs.personId,
             personName: contribPerson?.name,
           });
+          
+          // If pre-tax contributions exceed cap, add excess back to assessable income
+          // (The excess wasn't really concessional - it must be taxed at marginal rate)
+          const preTaxExcess = Math.max(0, contribs.preTaxReduction - concessionalWithinCap);
+          if (preTaxExcess > 0) {
+            taxEvents.push({
+              id: uuidv4(),
+              year,
+              type: 'incomeTax',
+              description: `Excess Concessional (Salary Sacrifice): ${superAccount.name}`,
+              sourceAccountId: superAccountId,
+              sourceAccountName: superAccount.name,
+              assessableAmount: preTaxExcess, // Add back to assessable income
+              fundedFromAccountId: fundingAccountId,
+              fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
+              personId: contribs.personId,
+              personName: contribPerson?.name,
+            });
+          }
+        }
+        
+        // PERSONAL DEDUCTIBLE (post-tax): Only amount within cap is deductible
+        if (contribs.postTaxDeduction > 0) {
+          // Calculate how much of the post-tax contribution is deductible
+          // It's limited to: (1) the available cap, and (2) the post-tax amount claimed
+          // But we also need to account for any pre-tax contributions that used up the cap
+          const capRemainingAfterPreTax = Math.max(0, concessionalWithinCap - contribs.preTaxReduction);
+          const deductiblePostTax = Math.min(contribs.postTaxDeduction, capRemainingAfterPreTax);
+          
+          if (deductiblePostTax > 0) {
+            taxEvents.push({
+              id: uuidv4(),
+              year,
+              type: 'taxDeduction',
+              description: `Personal Deductible: ${superAccount.name}`,
+              sourceAccountId: superAccountId,
+              sourceAccountName: superAccount.name,
+              assessableAmount: -deductiblePostTax, // Only the capped amount is deductible
+              fundedFromAccountId: fundingAccountId,
+              fundedFromAccountName: fundingAccount?.name ?? 'Not configured',
+              personId: contribs.personId,
+              personName: contribPerson?.name,
+            });
+          }
+          // Note: Excess post-tax contributions are NOT added back - they were already taxed
         }
         
         // Calculate Division 293 tax if applicable
+        // Only concessional contributions WITHIN the cap are subject to Div 293
+        // (excess concessional contributions are excluded per ATO rules)
+        // Use the PERSON's income, not total income across all persons
+        const personIncome = incomeByPerson.get(contribs.personId) ?? 0;
         const div293Result = calculateDiv293(
-          totalIncome, // Use total assessable income for the year
-          contribs.concessional,
+          personIncome, // Use this person's assessable income
+          concessionalWithinCap,
           settings.super
         );
         
@@ -1229,6 +1439,11 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     }
 
     for (const account of accounts) {
+      // Skip tax accounts - they get their results from createTaxAccountYearResults
+      const category = account.category ?? 'standard';
+      if (category !== 'standard') {
+        continue;
+      }
       const result = accountResults.get(account.id);
       if (result) {
         yearAccounts.push(result);
@@ -1239,6 +1454,10 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     let totalLiquidAssets = 0;
     let totalLiabilities = 0;
     for (const account of accounts) {
+      // Skip accounts that don't contribute to net worth (tax cap/carry-forward accounts)
+      if (account.includeInNetWorth === false) {
+        continue;
+      }
       const value = accountValues.get(account.id) ?? 0;
       if (account.type === 'asset') {
         totalAssets += value;
@@ -1299,13 +1518,21 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       carryForwardStates = newCarryForwardStates;
       nonConcessionalCapStates = newNonConcessionalCapStates;
       
-      // Create off-balance sheet items for cap accounts (opening/movement/closing)
+      // Create off-balance sheet items for cap accounts (opening/movement/closing) - legacy
       const capAccountItems = createCapAccountOffBalanceSheetItems(
         yearContributionResults,
         persons,
         settings.super
       );
       offBalanceSheet.push(...capAccountItems);
+      
+      // Create AccountYearResult for tax accounts (new approach)
+      const taxAccountResults = createTaxAccountYearResults(
+        yearContributionResults,
+        accounts,
+        year
+      );
+      yearAccounts.push(...taxAccountResults);
     }
     
     // Add franking credits to off-balance sheet if any were generated (per person)
@@ -1319,6 +1546,12 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           personId: personId !== 'unassigned' ? personId : undefined,
           value: credits,
         });
+        
+        // Also create AccountYearResult for franking credits account
+        const frankingResult = createFrankingCreditsYearResult(accounts, personId, credits, year);
+        if (frankingResult) {
+          yearAccounts.push(frankingResult);
+        }
       }
     }
 
@@ -1363,6 +1596,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       netPosition,
       resolvedAssumptions,
       offBalanceSheet: offBalanceSheet.length > 0 ? offBalanceSheet : undefined,
+      warnings: yearWarnings.length > 0 ? yearWarnings : undefined,
     });
   }
 

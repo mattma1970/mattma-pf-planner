@@ -36,7 +36,7 @@ export const CapitalGainRealisationClassificationSchema = z.object({
 export const SuperContributionClassificationSchema = z.object({
   kind: z.literal('superContribution'),
   contributionType: z.enum(['concessional', 'nonConcessional']),
-  source: z.enum(['employer', 'salarySacrifice', 'personalDeductible', 'personalNonDeductible']),
+  source: z.enum(['employer', 'salarySacrifice', 'personal']),
   countsTowardsConcessionalCap: z.boolean().default(true),
   deductibleAgainstIncome: z.boolean().default(false),
 });

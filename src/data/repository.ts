@@ -1,7 +1,16 @@
 import type { Account, Assumptions, Event, Person, Epoch, Settings } from '../schemas';
-import { defaultSettings } from '../schemas';
+import { AccountSchema, defaultSettings } from '../schemas';
 import { db } from './database';
 import { defaultAssumptions, DEFAULT_ASSUMPTIONS_ID } from './defaults';
+
+/**
+ * Apply schema defaults to an account loaded from storage.
+ * This ensures old accounts get new fields like 'category' and 'includeInNetWorth'.
+ */
+function applyAccountDefaults(rawAccount: unknown): Account {
+  // Parse through the schema to apply all defaults
+  return AccountSchema.parse(rawAccount);
+}
 
 const DEFAULT_SETTINGS_ID = 'default-settings';
 
@@ -37,11 +46,14 @@ export interface DataRepository {
 
 export class IndexedDBRepository implements DataRepository {
   async getAccounts(): Promise<Account[]> {
-    return db.accounts.toArray();
+    const rawAccounts = await db.accounts.toArray();
+    // Apply schema defaults to ensure new fields are populated
+    return rawAccounts.map(applyAccountDefaults);
   }
 
   async getAccount(id: string): Promise<Account | undefined> {
-    return db.accounts.get(id);
+    const rawAccount = await db.accounts.get(id);
+    return rawAccount ? applyAccountDefaults(rawAccount) : undefined;
   }
 
   async saveAccount(account: Account): Promise<void> {

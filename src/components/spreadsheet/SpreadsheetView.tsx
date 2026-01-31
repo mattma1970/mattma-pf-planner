@@ -16,6 +16,7 @@ import {
 import { AccountRow } from './AccountRow';
 import { GroupHeader } from './GroupHeader';
 import { YearCell } from './YearCell';
+import { WarningsPanel } from './WarningsPanel';
 import type { Account, AccountType } from '../../schemas/account';
 import type { Epoch } from '../../schemas/epoch';
 import type { Event } from '../../schemas/event';
@@ -66,6 +67,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
   const [selectedTaxDetail, setSelectedTaxDetail] = useState<TaxDetailState | null>(null);
   const [isTaxExpanded, setIsTaxExpanded] = useState(false);
   const [isCashflowExpanded, setIsCashflowExpanded] = useState(false);
+  const [isTaxAccountsExpanded, setIsTaxAccountsExpanded] = useState(false);
 
   const sortedEpochs = useMemo(() => [...epochs].sort((a, b) => a.order - b.order), [epochs]);
 
@@ -81,13 +83,65 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
   );
 
   const accountsByType = useMemo(() => {
+    // Filter out tax/off-balance sheet accounts - only show standard accounts
+    const standardAccounts = accounts.filter((a) => {
+      const category = a.category ?? 'standard';
+      const isStandard = category === 'standard';
+      // Also exclude by specialConfig.kind if category is missing
+      const hasTaxConfig = a.specialConfig?.kind != null;
+      return isStandard && !hasTaxConfig;
+    });
     return {
-      income: accounts.filter((a) => a.type === 'income'),
-      expense: accounts.filter((a) => a.type === 'expense'),
-      asset: accounts.filter((a) => a.type === 'asset'),
-      liability: accounts.filter((a) => a.type === 'liability'),
+      income: standardAccounts.filter((a) => a.type === 'income'),
+      expense: standardAccounts.filter((a) => a.type === 'expense'),
+      asset: standardAccounts.filter((a) => a.type === 'asset'),
+      liability: standardAccounts.filter((a) => a.type === 'liability'),
     };
   }, [accounts]);
+
+  // Group tax accounts by person, then by category
+  const taxAccountsByPerson = useMemo(() => {
+    const taxAccounts = accounts.filter((a) => (a.category ?? 'standard') !== 'standard');
+    const byPerson = new Map<string, typeof taxAccounts>();
+    
+    for (const account of taxAccounts) {
+      const personId = account.owner ?? 'unassigned';
+      if (!byPerson.has(personId)) {
+        byPerson.set(personId, []);
+      }
+      byPerson.get(personId)!.push(account);
+    }
+    
+    // Sort accounts within each person by category for consistent ordering
+    const categoryOrder = ['taxCarryForward', 'taxCap', 'taxLoss', 'capitalLoss', 'hecsDebt', 'cgtDiscountTracker'];
+    for (const [, personAccounts] of byPerson) {
+      personAccounts.sort((a, b) => {
+        const aIdx = categoryOrder.indexOf(a.category ?? 'standard');
+        const bIdx = categoryOrder.indexOf(b.category ?? 'standard');
+        return aIdx - bIdx;
+      });
+    }
+    
+    return byPerson;
+  }, [accounts]);
+
+  const taxCategoryLabels: Record<string, string> = {
+    taxCap: 'Contribution Caps',
+    taxCarryForward: 'Carry-Forward Caps',
+    taxLoss: 'Tax Losses',
+    capitalLoss: 'Capital Losses',
+    hecsDebt: 'HECS/HELP Debt',
+    cgtDiscountTracker: 'CGT Discount Tracking',
+  };
+
+  // Helper to get account type short label
+  const getAccountTypeLabel = (account: typeof accounts[0]): string => {
+    if (account.specialConfig?.kind === 'concessionalCarryForward') return 'Concessional Cap';
+    if (account.specialConfig?.kind === 'nonConcessionalCap') return 'Non-Concessional Cap';
+    if (account.specialConfig?.kind === 'frankingCredits') return 'Franking Credits';
+    return taxCategoryLabels[account.category ?? ''] ?? account.category ?? '';
+  };
+
 
   const taxByPersonDetailed = useMemo(() => {
     const personIds = new Set<string>();
@@ -136,7 +190,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
             personNames.set(personId, personName);
           }
           
-          const sourceKey = taxEvent.sourceAccountId ?? `__${taxEvent.type}__${taxEvent.description}`;
+          const sourceKey = `${taxEvent.type}__${taxEvent.sourceAccountId ?? taxEvent.description}`;
           if (!superFundTaxesByPerson.has(personId)) {
             superFundTaxesByPerson.set(personId, new Map());
           }
@@ -233,48 +287,6 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
     return map;
   }, [events, showEventHighlights]);
 
-  const offBalanceSheetData = useMemo(() => {
-    const itemsById = new Map<string, { id: string; label: string; type: string; personId?: string; valuesByYear: Map<number, number> }>();
-    const personNames = new Map(persons.map(p => [p.id, p.name]));
-    
-    for (const yearResult of years) {
-      for (const item of yearResult.offBalanceSheet ?? []) {
-        if (!itemsById.has(item.id)) {
-          itemsById.set(item.id, {
-            id: item.id,
-            label: item.label,
-            type: item.type,
-            personId: item.personId,
-            valuesByYear: new Map(),
-          });
-        }
-        itemsById.get(item.id)!.valuesByYear.set(yearResult.year, item.value ?? item.closing ?? 0);
-      }
-    }
-    
-    const itemsByType = new Map<string, typeof itemsById extends Map<string, infer V> ? V[] : never>();
-    for (const item of itemsById.values()) {
-      if (!itemsByType.has(item.type)) {
-        itemsByType.set(item.type, []);
-      }
-      itemsByType.get(item.type)!.push(item);
-    }
-    
-    const typeLabels: Record<string, string> = {
-      carryForwardContribution: 'Carry Forward Contributions',
-      frankingCredits: 'Franking Credits',
-      concessionalCapAccount: 'Concessional Cap',
-      nonConcessionalCapAccount: 'Non-Concessional Cap',
-    };
-    
-    return {
-      hasItems: itemsById.size > 0,
-      itemsByType,
-      typeLabels,
-      personNames,
-    };
-  }, [years, persons]);
-
   const handleDragEnd = (type: AccountType) => (event: DragEndEvent) => {
     const { active, over } = event;
     if (over && active.id !== over.id) {
@@ -301,7 +313,9 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
   }
 
   return (
-    <div className="overflow-x-auto border border-gray-200 rounded-lg">
+    <div>
+      <WarningsPanel years={years} />
+      <div className="overflow-x-auto border border-gray-200 rounded-lg">
       <table className="min-w-full divide-y divide-gray-200">
         <thead className="bg-gray-50">
           <tr>
@@ -567,13 +581,10 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                                 </td>
                                 {years.map((yearData) => {
                                   const eventData = sourceEventsByYear?.get(yearData.year);
-                                  const isOffset = taxType === 'taxDeduction' || taxType === 'frankingCreditOffset';
                                   return (
                                     <td
                                       key={yearData.year}
-                                      className={`px-3 py-1 text-right text-sm ${
-                                        isOffset ? 'text-green-600' : 'text-gray-600'
-                                      }`}
+                                      className="px-3 py-1 text-right text-sm text-gray-600"
                                     >
                                       {eventData ? formatCurrency(eventData.assessableAmount) : '-'}
                                     </td>
@@ -590,13 +601,10 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                             </td>
                             {years.map((yearData) => {
                               const subtotal = typeSubtotals?.get(yearData.year) ?? 0;
-                              const isOffset = taxType === 'taxDeduction' || taxType === 'frankingCreditOffset';
                               return (
                                 <td
                                   key={yearData.year}
-                                  className={`px-3 py-1 text-right text-sm font-medium ${
-                                    isOffset ? 'text-green-700' : 'text-gray-700'
-                                  }`}
+                                  className="px-3 py-1 text-right text-sm font-medium text-gray-700"
                                 >
                                   {formatCurrency(subtotal)}
                                 </td>
@@ -608,8 +616,8 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                     })}
                     
                     {/* Total Assessable row */}
-                    <tr key={`${personId}-total-assessable`} className={colors.headerBg}>
-                      <td className={`px-3 py-1.5 text-left text-gray-800 sticky left-0 ${colors.headerBg} border-r border-gray-200 min-w-48 pl-10`}>
+                    <tr key={`${personId}-total-assessable`} className="bg-gray-50">
+                      <td className="px-3 py-1.5 text-left text-gray-800 sticky left-0 bg-gray-50 border-r border-gray-200 min-w-48 pl-10">
                         <span className="text-sm font-semibold">Total Assessable</span>
                       </td>
                       {years.map((yearData) => {
@@ -623,8 +631,8 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                     </tr>
                     
                     {/* Tax Payable row */}
-                    <tr key={`${personId}-tax-payable`} className={colors.totalsBg}>
-                      <td className={`px-3 py-1.5 text-left ${colors.totalsText} sticky left-0 ${colors.totalsBg} border-r border-gray-200 min-w-48 pl-10`}>
+                    <tr key={`${personId}-tax-payable`} className="bg-gray-100">
+                      <td className="px-3 py-1.5 text-left text-gray-900 sticky left-0 bg-gray-100 border-r border-gray-200 min-w-48 pl-10">
                         <span className="text-sm font-semibold">Tax Payable</span>
                       </td>
                       {years.map((yearData) => {
@@ -632,7 +640,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                         return (
                           <td
                             key={yearData.year}
-                            className={`px-3 py-1.5 text-right ${colors.totalsText} text-sm font-semibold`}
+                            className="px-3 py-1.5 text-right text-gray-900 text-sm font-semibold"
                           >
                             {formatCurrency(yearTotals?.calculatedTax ?? 0)}
                           </td>
@@ -648,8 +656,8 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                       const sourceKeys = Array.from(superTaxes.keys());
                       return (
                         <>
-                          <tr key={`${personId}-super-taxes-header`} className="bg-orange-50">
-                            <td className="px-3 py-1 text-left text-orange-700 sticky left-0 bg-orange-50 border-r border-gray-200 min-w-48 pl-10">
+                          <tr key={`${personId}-super-taxes-header`} className="bg-gray-50">
+                            <td className="px-3 py-1 text-left text-gray-600 sticky left-0 bg-gray-50 border-r border-gray-200 min-w-48 pl-10">
                               <span className="text-xs font-medium">Super Fund Taxes (info only)</span>
                             </td>
                             {years.map((yearData) => (
@@ -669,7 +677,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                               <tr key={`${personId}-super-tax-${sourceKey}`} className="bg-white">
                                 <td className="px-3 py-1 text-left text-gray-500 sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-12">
                                   <div className="flex items-center gap-2">
-                                    <span className="text-xs px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">
+                                    <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
                                       {label}
                                     </span>
                                     <span className="text-xs text-gray-500">{description.replace('Contributions Tax: ', '').replace('Div 293: ', '')}</span>
@@ -711,7 +719,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
             </th>
           </tr>
           
-          {isCashflowExpanded && accounts.filter(a => a.type === 'asset' || a.type === 'liability').map((account) => {
+          {isCashflowExpanded && [...accountsByType.asset, ...accountsByType.liability].map((account) => {
             const isLiability = account.type === 'liability';
             const formatCurrency = (value: number) => new Intl.NumberFormat('en-AU', {
               style: 'currency',
@@ -758,7 +766,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                     const result = yearData.accounts.find(a => a.accountId === account.id);
                     const value = result?.contributions ?? 0;
                     return (
-                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value !== 0 ? 'text-gray-600' : 'text-gray-400'}`}>
                         {value !== 0 ? formatCurrency(value) : '-'}
                       </td>
                     );
@@ -774,7 +782,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                     const result = yearData.accounts.find(a => a.accountId === account.id);
                     const value = result?.withdrawals ?? 0;
                     return (
-                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value !== 0 ? 'text-gray-600' : 'text-gray-400'}`}>
                         {value !== 0 ? formatCurrency(-value) : '-'}
                       </td>
                     );
@@ -817,7 +825,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                     const result = yearData.accounts.find(a => a.accountId === account.id);
                     const value = result?.transfers ?? 0;
                     return (
-                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value > 0 ? 'text-green-600' : value < 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value !== 0 ? 'text-gray-600' : 'text-gray-400'}`}>
                         {value !== 0 ? formatCurrency(value) : '-'}
                       </td>
                     );
@@ -833,7 +841,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                     const result = yearData.accounts.find(a => a.accountId === account.id);
                     const value = result?.growth ?? 0;
                     return (
-                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${isLiability ? (value > 0 ? 'text-red-600' : 'text-gray-400') : (value > 0 ? 'text-blue-600' : value < 0 ? 'text-red-600' : 'text-gray-400')}`}>
+                      <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value !== 0 ? 'text-gray-600' : 'text-gray-400'}`}>
                         {value !== 0 ? formatCurrency(value) : '-'}
                       </td>
                     );
@@ -850,7 +858,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                       const result = yearData.accounts.find(a => a.accountId === account.id);
                       const value = result?.growth ?? 0; // Interest paid equals interest accrued
                       return (
-                        <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                        <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value !== 0 ? 'text-gray-600' : 'text-gray-400'}`}>
                           {value !== 0 ? formatCurrency(-value) : '-'}
                         </td>
                       );
@@ -877,20 +885,57 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
             );
           })}
 
-          {/* Off-Balance Sheet Items within Account Analysis */}
-          {isCashflowExpanded && offBalanceSheetData.hasItems && Array.from(offBalanceSheetData.itemsByType.entries()).map(([type, items]) => {
+
+
+          {/* Off-Balance Sheet Accounts Section */}
+          <tr className="bg-gray-100">
+            <th className="px-3 py-2 text-left font-semibold text-gray-700 sticky left-0 bg-gray-100 border-r border-gray-200 min-w-48">
+              <button
+                onClick={() => setIsTaxAccountsExpanded(!isTaxAccountsExpanded)}
+                className="flex items-center gap-2 hover:text-gray-900 cursor-pointer"
+              >
+                <span className={`transition-transform ${isTaxAccountsExpanded ? 'rotate-90' : ''}`}>▶</span>
+                Off Bal. Sheet
+              </button>
+            </th>
+            {years.map((yearData) => (
+              <td key={yearData.year} className="px-3 py-2 text-right text-xs text-gray-400 bg-gray-100">
+                {yearData.year}
+              </td>
+            ))}
+          </tr>
+
+          {isTaxAccountsExpanded && Array.from(taxAccountsByPerson.entries()).map(([personId, personAccounts]) => {
             const formatCurrency = (value: number) => new Intl.NumberFormat('en-AU', {
               style: 'currency',
               currency: 'AUD',
               minimumFractionDigits: 0,
               maximumFractionDigits: 0,
             }).format(value);
+
+            const person = persons.find(p => p.id === personId);
+            const personName = person?.name ?? 'Unassigned';
             
+            // Get color classes based on person's configured color
+            const colorConfig: Record<string, { headerBg: string; headerText: string }> = {
+              indigo: { headerBg: 'bg-indigo-100/50', headerText: 'text-indigo-800' },
+              blue: { headerBg: 'bg-blue-100/50', headerText: 'text-blue-800' },
+              emerald: { headerBg: 'bg-emerald-100/50', headerText: 'text-emerald-800' },
+              amber: { headerBg: 'bg-amber-100/50', headerText: 'text-amber-800' },
+              rose: { headerBg: 'bg-rose-100/50', headerText: 'text-rose-800' },
+              purple: { headerBg: 'bg-purple-100/50', headerText: 'text-purple-800' },
+              cyan: { headerBg: 'bg-cyan-100/50', headerText: 'text-cyan-800' },
+              orange: { headerBg: 'bg-orange-100/50', headerText: 'text-orange-800' },
+            };
+            const personColor = person?.color ?? 'indigo';
+            const colors = colorConfig[personColor] ?? colorConfig.indigo;
+
             return (
-              <Fragment key={`obs-type-${type}`}>
-                <tr className="bg-purple-100/50">
-                  <td className="px-3 py-1.5 text-left font-medium text-purple-800 sticky left-0 bg-purple-100/50 border-r border-gray-200 min-w-48">
-                    {offBalanceSheetData.typeLabels[type] ?? type}
+              <Fragment key={`tax-person-${personId}`}>
+                {/* Person header */}
+                <tr className={colors.headerBg}>
+                  <td className={`px-3 py-1.5 text-left font-medium ${colors.headerText} sticky left-0 ${colors.headerBg} border-r border-gray-200 min-w-48`}>
+                    {personName}
                   </td>
                   {years.map((yearData) => (
                     <td key={yearData.year} className="px-3 py-1.5 text-right text-xs text-gray-400">
@@ -898,27 +943,85 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                     </td>
                   ))}
                 </tr>
-                
-                {items.map((item) => {
-                  const personName = item.personId ? offBalanceSheetData.personNames.get(item.personId) : undefined;
-                  const displayLabel = personName ? `${personName}` : item.label;
-                  
-                  return (
-                    <tr key={`obs-${item.id}`} className="bg-white">
-                      <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
-                        {displayLabel}
+
+                {personAccounts.map((account) => (
+                  <Fragment key={`tax-account-${account.id}`}>
+                    {/* Account header - show just the type label since person is already shown */}
+                    <tr className="bg-gray-50">
+                      <td className="px-3 py-1 text-left text-gray-700 text-sm font-medium sticky left-0 bg-gray-50 border-r border-gray-200 min-w-48 pl-6">
+                        {getAccountTypeLabel(account)}
+                      </td>
+                      {years.map((yearData) => (
+                        <td key={yearData.year} className="px-3 py-1 text-right text-xs text-gray-400">
+                          {yearData.year}
+                        </td>
+                      ))}
+                    </tr>
+
+                    {/* Opening Balance */}
+                    <tr className="bg-white">
+                      <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-10">
+                        Opening Balance
                       </td>
                       {years.map((yearData) => {
-                        const value = item.valuesByYear.get(yearData.year) ?? 0;
+                        const result = yearData.accounts.find(a => a.accountId === account.id);
                         return (
                           <td key={yearData.year} className="px-3 py-1 text-right text-sm text-gray-600">
+                            {result ? formatCurrency(result.startValue) : '-'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+
+                    {/* Contributions / Additions */}
+                    <tr className="bg-white">
+                      <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-10">
+                        + Additions
+                      </td>
+                      {years.map((yearData) => {
+                        const result = yearData.accounts.find(a => a.accountId === account.id);
+                        const value = result?.contributions ?? 0;
+                        return (
+                          <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value !== 0 ? 'text-gray-600' : 'text-gray-400'}`}>
                             {value !== 0 ? formatCurrency(value) : '-'}
                           </td>
                         );
                       })}
                     </tr>
-                  );
-                })}
+
+                    {/* Withdrawals / Deductions */}
+                    <tr className="bg-white">
+                      <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-10">
+                        − Deductions
+                      </td>
+                      {years.map((yearData) => {
+                        const result = yearData.accounts.find(a => a.accountId === account.id);
+                        const value = result?.withdrawals ?? 0;
+                        return (
+                          <td key={yearData.year} className={`px-3 py-1 text-right text-sm ${value !== 0 ? 'text-gray-600' : 'text-gray-400'}`}>
+                            {value !== 0 ? formatCurrency(-value) : '-'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+
+                    {/* Closing Balance */}
+                    <tr className="bg-gray-50">
+                      <td className="px-3 py-1 text-left text-gray-800 text-sm font-medium sticky left-0 bg-gray-50 border-r border-gray-200 min-w-48 pl-10">
+                        = Closing Balance
+                      </td>
+                      {years.map((yearData) => {
+                        const result = yearData.accounts.find(a => a.accountId === account.id);
+                        const value = result?.endValue ?? 0;
+                        return (
+                          <td key={yearData.year} className={`px-3 py-1 text-right text-sm font-medium ${value < 0 ? 'text-red-600' : 'text-gray-800'}`}>
+                            {formatCurrency(value)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  </Fragment>
+                ))}
               </Fragment>
             );
           })}
@@ -954,6 +1057,7 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
           onClose={() => setSelectedTaxDetail(null)}
         />
       )}
+      </div>
     </div>
   );
 }

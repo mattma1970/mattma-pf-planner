@@ -8,10 +8,13 @@ import {
   createCarryForwardOffBalanceSheetItems,
   initializeCarryForwardStates,
   calculateEffectiveIncomeReduction,
+  initializeCarryForwardStatesFromAccounts,
+  initializeNonConcessionalCapStatesFromAccounts,
+  createTaxAccountYearResults,
   type CarryForwardState,
   type NonConcessionalCapState,
 } from './superContributions';
-import type { Event, Person } from '../schemas';
+import type { Event, Person, Account } from '../schemas';
 import type { SuperSettings } from '../schemas/settings';
 
 // Test super settings
@@ -343,7 +346,7 @@ describe('aggregateContributionsByPerson', () => {
         amount: 20000,
         superContribution: {
           contributionType: 'nonConcessional',
-          source: 'personalAfterTax',
+          source: 'personal',
           memberPersonId: 'p1',
           reducesAssessableIncome: false,
           exemptFromCap: false,
@@ -602,7 +605,7 @@ describe('exemptFromCap contributions', () => {
         amount: 50000,
         superContribution: {
           contributionType: 'nonConcessional',
-          source: 'personalAfterTax',
+          source: 'personal',
           memberPersonId: 'p1',
           reducesAssessableIncome: false,
           exemptFromCap: false,
@@ -626,7 +629,7 @@ describe('exemptFromCap contributions', () => {
         amount: 20000,
         superContribution: {
           contributionType: 'concessional',
-          source: 'personalDeductible',
+          source: 'personal',
           memberPersonId: 'p1',
           reducesAssessableIncome: true,
           exemptFromCap: true, // Hypothetical exempt concessional
@@ -680,5 +683,194 @@ describe('calculateEffectiveIncomeReduction', () => {
     
     expect(result.effectiveReduction).toBe(60000);
     expect(result.excessNotDeductible).toBe(20000);
+  });
+});
+
+describe('initializeCarryForwardStatesFromAccounts', () => {
+  const persons: Person[] = [
+    { id: 'p1', name: 'Alice', birthYear: 1980 },
+    { id: 'p2', name: 'Bob', birthYear: 1975 },
+  ];
+
+  it('returns empty unusedCaps for all persons when no tax accounts exist', () => {
+    const accounts: Account[] = [];
+    const result = initializeCarryForwardStatesFromAccounts(persons, accounts, 2025, testSettings);
+    
+    expect(result.get('p1')?.unusedCaps).toEqual([]);
+    expect(result.get('p2')?.unusedCaps).toEqual([]);
+  });
+
+  it('uses explicit buckets from specialConfig when present', () => {
+    const accounts: Account[] = [
+      {
+        id: 'acc-1',
+        name: 'Alice Carry Forward',
+        type: 'asset',
+        category: 'taxCarryForward',
+        includeInNetWorth: false,
+        owner: 'p1',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        specialConfig: {
+          kind: 'concessionalCarryForward',
+          buckets: [
+            { year: 2022, amount: 10000 },
+            { year: 2023, amount: 15000 },
+          ],
+        },
+      },
+    ];
+    
+    const result = initializeCarryForwardStatesFromAccounts(persons, accounts, 2025, testSettings);
+    
+    expect(result.get('p1')?.unusedCaps).toEqual([
+      { year: 2022, amount: 10000 },
+      { year: 2023, amount: 15000 },
+    ]);
+    expect(result.get('p2')?.unusedCaps).toEqual([]);
+  });
+
+  it('creates synthetic bucket at oldest valid year when only initialValue > 0', () => {
+    const accounts: Account[] = [
+      {
+        id: 'acc-1',
+        name: 'Bob Carry Forward',
+        type: 'asset',
+        category: 'taxCarryForward',
+        includeInNetWorth: false,
+        owner: 'p2',
+        initialValue: 25000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        specialConfig: {
+          kind: 'concessionalCarryForward',
+          buckets: [],
+        },
+      },
+    ];
+    
+    const result = initializeCarryForwardStatesFromAccounts(persons, accounts, 2025, testSettings);
+    
+    expect(result.get('p2')?.unusedCaps).toEqual([
+      { year: 2020, amount: 25000 },
+    ]);
+  });
+});
+
+describe('initializeNonConcessionalCapStatesFromAccounts', () => {
+  const persons: Person[] = [
+    { id: 'p1', name: 'Alice', birthYear: 1980 },
+    { id: 'p2', name: 'Bob', birthYear: 1975 },
+  ];
+
+  it('returns closingBalance = 0 when no tax accounts exist', () => {
+    const accounts: Account[] = [];
+    const result = initializeNonConcessionalCapStatesFromAccounts(persons, accounts);
+    
+    expect(result.get('p1')?.closingBalance).toBe(0);
+    expect(result.get('p2')?.closingBalance).toBe(0);
+  });
+
+  it('uses priorClosingBalance from specialConfig when present', () => {
+    const accounts: Account[] = [
+      {
+        id: 'acc-1',
+        name: 'Alice Non-Concessional Cap',
+        type: 'asset',
+        category: 'taxCap',
+        includeInNetWorth: false,
+        owner: 'p1',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        specialConfig: {
+          kind: 'nonConcessionalCap',
+          priorClosingBalance: -120000,
+        },
+      },
+    ];
+    
+    const result = initializeNonConcessionalCapStatesFromAccounts(persons, accounts);
+    
+    expect(result.get('p1')?.closingBalance).toBe(-120000);
+    expect(result.get('p2')?.closingBalance).toBe(0);
+  });
+
+  it('uses initialValue as closingBalance when priorClosingBalance is not set', () => {
+    const accounts: Account[] = [
+      {
+        id: 'acc-1',
+        name: 'Bob Non-Concessional Cap',
+        type: 'asset',
+        category: 'taxCap',
+        includeInNetWorth: false,
+        owner: 'p2',
+        initialValue: 60000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        specialConfig: {
+          kind: 'nonConcessionalCap',
+          priorClosingBalance: undefined,
+        } as any,
+      },
+    ];
+    
+    const result = initializeNonConcessionalCapStatesFromAccounts(persons, accounts);
+    
+    expect(result.get('p2')?.closingBalance).toBe(60000);
+  });
+});
+
+describe('createTaxAccountYearResults', () => {
+  it('creates AccountYearResult with correct opening/closing values for cap accounts', () => {
+    const accounts: Account[] = [
+      {
+        id: 'conc-acc-1',
+        name: 'Alice Concessional Carry Forward',
+        type: 'asset',
+        category: 'taxCarryForward',
+        includeInNetWorth: false,
+        owner: 'p1',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        specialConfig: {
+          kind: 'concessionalCarryForward',
+          buckets: [],
+        },
+      },
+      {
+        id: 'nonconc-acc-1',
+        name: 'Alice Non-Concessional Cap',
+        type: 'asset',
+        category: 'taxCap',
+        includeInNetWorth: false,
+        owner: 'p1',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        specialConfig: {
+          kind: 'nonConcessionalCap',
+          priorClosingBalance: 0,
+        },
+      },
+    ];
+    
+    const emptyCarryForwardState: CarryForwardState = { personId: 'p1', unusedCaps: [] };
+    const emptyNonConcState: NonConcessionalCapState = { personId: 'p1', closingBalance: 0 };
+    const contributionResult = processPersonContributions(
+      'p1', 2025, 20000, 50000, emptyCarryForwardState, emptyNonConcState, testSettings
+    );
+    
+    const yearResults = createTaxAccountYearResults([contributionResult], accounts, 2025);
+    
+    expect(yearResults).toHaveLength(2);
+    
+    const concResult = yearResults.find(r => r.accountId === 'conc-acc-1');
+    expect(concResult).toBeDefined();
+    expect(concResult?.startValue).toBe(30000);
+    expect(concResult?.withdrawals).toBe(20000);
+    expect(concResult?.endValue).toBe(10000);
+    
+    const nonConcResult = yearResults.find(r => r.accountId === 'nonconc-acc-1');
+    expect(nonConcResult).toBeDefined();
+    expect(nonConcResult?.startValue).toBe(120000);
+    expect(nonConcResult?.withdrawals).toBe(50000);
+    expect(nonConcResult?.endValue).toBe(70000);
   });
 });

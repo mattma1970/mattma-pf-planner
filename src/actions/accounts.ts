@@ -1,12 +1,14 @@
 import { v4 as uuidv4 } from 'uuid';
-import type { Account } from '../schemas';
+import type { Account, AccountInput } from '../schemas';
+import { AccountSchema } from '../schemas';
 import { repository } from '../data';
 
-export async function createAccount(data: Omit<Account, 'id'>): Promise<Account> {
-  const account: Account = {
+export async function createAccount(data: Omit<AccountInput, 'id'>): Promise<Account> {
+  // Use Zod parse to apply all defaults (category, includeInNetWorth, growthProfile sub-fields)
+  const account = AccountSchema.parse({
     ...data,
     id: uuidv4(),
-  };
+  });
   await repository.saveAccount(account);
   return account;
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Account } from '../schemas';
 import * as accountActions from '../actions/accounts';
+import * as personActions from '../actions/persons';
 
 export function useAccounts() {
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -10,6 +11,14 @@ export function useAccounts() {
   const refresh = useCallback(async () => {
     try {
       setLoading(true);
+      
+      // First, ensure tax accounts exist for all persons (migration)
+      const persons = await personActions.getPersons();
+      for (const person of persons) {
+        await personActions.ensureTaxAccountsForPerson(person);
+      }
+      
+      // Now load all accounts (including newly created tax accounts)
       const data = await accountActions.getAccounts();
       setAccounts(data);
       setError(null);

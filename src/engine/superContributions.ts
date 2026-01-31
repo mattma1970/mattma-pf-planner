@@ -1,4 +1,4 @@
-import type { Account, Event, Person, OffBalanceSheetItem, SuperContributionType } from '../schemas';
+import type { Account, AccountYearResult, Event, Person, OffBalanceSheetItem, SuperContributionType, ConcessionalCarryForwardConfig, NonConcessionalCapConfig } from '../schemas';
 import type { SuperSettings } from '../schemas/settings';
 import { defaultSuperSettings } from '../schemas/settings';
 
@@ -395,8 +395,7 @@ export function createCarryForwardOffBalanceSheetItems(
 }
 
 /**
- * Initialize carry-forward state for persons
- * In a real scenario, this might be loaded from stored data
+ * Initialize carry-forward state for persons (legacy - use initializeCarryForwardStatesFromAccounts)
  */
 export function initializeCarryForwardStates(persons: Person[]): Map<string, CarryForwardState> {
   const states = new Map<string, CarryForwardState>();
@@ -412,8 +411,59 @@ export function initializeCarryForwardStates(persons: Person[]): Map<string, Car
 }
 
 /**
- * Initialize non-concessional cap state for persons
- * closingBalance = 0 means prior year was "reset" state (opening will be $120k)
+ * Initialize carry-forward state from tax account records.
+ * Reads opening balances from Account.specialConfig.buckets or Account.initialValue.
+ */
+export function initializeCarryForwardStatesFromAccounts(
+  persons: Person[],
+  accounts: Account[],
+  startYear: number,
+  superSettings: SuperSettings = defaultSuperSettings
+): Map<string, CarryForwardState> {
+  const states = new Map<string, CarryForwardState>();
+  const carryForwardYears = superSettings.carryForwardYears;
+  
+  // Index carry-forward accounts by owner
+  const carryForwardAccounts = accounts.filter(
+    (a) => a.category === 'taxCarryForward' && 
+           a.specialConfig?.kind === 'concessionalCarryForward'
+  );
+  const accountByOwner = new Map<string, Account>();
+  for (const acc of carryForwardAccounts) {
+    if (acc.owner) {
+      accountByOwner.set(acc.owner, acc);
+    }
+  }
+  
+  for (const person of persons) {
+    const account = accountByOwner.get(person.id);
+    let unusedCaps: { year: number; amount: number }[] = [];
+    
+    if (account) {
+      const config = account.specialConfig as ConcessionalCarryForwardConfig | undefined;
+      
+      if (config?.buckets && config.buckets.length > 0) {
+        // Use explicitly configured buckets
+        unusedCaps = config.buckets;
+      } else if (account.initialValue > 0) {
+        // Simple mode: seed a single "synthetic" bucket at oldest valid year
+        // This is conservative - it expires soonest
+        const syntheticYear = startYear - carryForwardYears;
+        unusedCaps = [{ year: syntheticYear, amount: account.initialValue }];
+      }
+    }
+    
+    states.set(person.id, {
+      personId: person.id,
+      unusedCaps,
+    });
+  }
+  
+  return states;
+}
+
+/**
+ * Initialize non-concessional cap state for persons (legacy - use initializeNonConcessionalCapStatesFromAccounts)
  */
 export function initializeNonConcessionalCapStates(persons: Person[]): Map<string, NonConcessionalCapState> {
   const states = new Map<string, NonConcessionalCapState>();
@@ -422,6 +472,53 @@ export function initializeNonConcessionalCapStates(persons: Person[]): Map<strin
     states.set(person.id, {
       personId: person.id,
       closingBalance: 0, // prior closing >= 0 → first year opening = cap
+    });
+  }
+  
+  return states;
+}
+
+/**
+ * Initialize non-concessional cap state from tax account records.
+ * Reads opening balances from Account.specialConfig.priorClosingBalance or Account.initialValue.
+ */
+export function initializeNonConcessionalCapStatesFromAccounts(
+  persons: Person[],
+  accounts: Account[]
+): Map<string, NonConcessionalCapState> {
+  const states = new Map<string, NonConcessionalCapState>();
+  
+  // Index non-concessional cap accounts by owner
+  const nonConcAccounts = accounts.filter(
+    (a) => a.category === 'taxCap' && 
+           a.specialConfig?.kind === 'nonConcessionalCap'
+  );
+  const accountByOwner = new Map<string, Account>();
+  for (const acc of nonConcAccounts) {
+    if (acc.owner) {
+      accountByOwner.set(acc.owner, acc);
+    }
+  }
+  
+  for (const person of persons) {
+    const account = accountByOwner.get(person.id);
+    let closingBalance = 0;
+    
+    if (account) {
+      const config = account.specialConfig as NonConcessionalCapConfig | undefined;
+      
+      if (config && config.priorClosingBalance !== undefined) {
+        // Use explicitly configured prior closing balance
+        closingBalance = config.priorClosingBalance;
+      } else if (account.initialValue > 0) {
+        // Treat initialValue as prior closing balance
+        closingBalance = account.initialValue;
+      }
+    }
+    
+    states.set(person.id, {
+      personId: person.id,
+      closingBalance,
     });
   }
   
@@ -445,9 +542,11 @@ export function createCapAccountOffBalanceSheetItems(
     
     // Concessional cap account
     // Opening: availableCarryForward + concessionalCap (total available at start)
+    // Closing: max(0, opening - contributions) - cap cannot go negative, excess flows to non-concessional
     const concessionalOpening = r.availableCarryForward + r.concessionalCap;
-    const concessionalMovement = -r.concessionalContributions;
-    const concessionalClosing = concessionalOpening + concessionalMovement;
+    const contributionsWithinCap = r.concessionalContributions - r.excessConcessional;
+    const concessionalMovement = -contributionsWithinCap;
+    const concessionalClosing = Math.max(0, concessionalOpening - r.concessionalContributions);
     
     items.push({
       id: `conc-cap-${r.personId}`,
@@ -474,4 +573,97 @@ export function createCapAccountOffBalanceSheetItems(
   }
   
   return items;
+}
+
+/**
+ * Create AccountYearResult entries for tax accounts (cap tracking).
+ * These are real Account records that track concessional/non-concessional caps.
+ */
+export function createTaxAccountYearResults(
+  results: ContributionProcessingResult[],
+  accounts: Account[],
+  year: number
+): AccountYearResult[] {
+  const yearResults: AccountYearResult[] = [];
+  
+  // Index tax accounts by owner and type
+  const accountByOwnerAndKind = new Map<string, Account>();
+  for (const acc of accounts) {
+    // Check for tax accounts: must have owner, non-standard category, and specialConfig
+    const category = acc.category ?? 'standard';
+    if (acc.owner && category !== 'standard' && acc.specialConfig) {
+      accountByOwnerAndKind.set(`${acc.owner}-${acc.specialConfig.kind}`, acc);
+    }
+  }
+  
+  
+  for (const r of results) {
+    // Concessional carry-forward account
+    const concAcc = accountByOwnerAndKind.get(`${r.personId}-concessionalCarryForward`);
+    if (concAcc) {
+      const opening = r.availableCarryForward + r.concessionalCap;
+      const contributionsWithinCap = r.concessionalContributions - r.excessConcessional;
+      const closing = Math.max(0, opening - r.concessionalContributions);
+      
+      yearResults.push({
+        accountId: concAcc.id,
+        year,
+        startValue: opening,
+        growth: 0,
+        contributions: 0,
+        withdrawals: contributionsWithinCap, // Contributions "use up" cap space
+        transfers: 0,
+        endValue: closing,
+      });
+    }
+    
+    // Non-concessional cap account
+    const nonConcAcc = accountByOwnerAndKind.get(`${r.personId}-nonConcessionalCap`);
+    if (nonConcAcc) {
+      yearResults.push({
+        accountId: nonConcAcc.id,
+        year,
+        startValue: r.nonConcessionalCapOpening,
+        growth: 0,
+        contributions: 0,
+        withdrawals: Math.abs(r.nonConcessionalCapMovement), // Contributions "use up" cap space
+        transfers: 0,
+        endValue: r.nonConcessionalCapClosing,
+      });
+    }
+  }
+  
+  return yearResults;
+}
+
+/**
+ * Create AccountYearResult for franking credits account.
+ */
+export function createFrankingCreditsYearResult(
+  accounts: Account[],
+  personId: string,
+  credits: number,
+  year: number
+): AccountYearResult | null {
+  // Find franking credits account for this person
+  const frankingAcc = accounts.find(
+    (a) => a.owner === personId && 
+           a.category === 'taxCap' && 
+           a.specialConfig?.kind === 'frankingCredits'
+  );
+  
+  if (!frankingAcc) {
+    return null;
+  }
+  
+  return {
+    accountId: frankingAcc.id,
+    year,
+    startValue: 0, // Franking credits are accumulated fresh each year
+    growth: 0,
+    contributions: credits,
+    withdrawals: 0,
+    transfers: 0,
+    endValue: credits,
+  };
 }

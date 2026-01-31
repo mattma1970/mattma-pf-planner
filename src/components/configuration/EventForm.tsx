@@ -249,8 +249,8 @@ export function EventForm({ event, accounts, persons, forecast, settings, onSubm
               value={superContributionType}
               onChange={(e) => setSuperContributionType(e.target.value as SuperContributionType)}
             >
-              <option value="concessional">Concessional (pre-tax)</option>
-              <option value="nonConcessional">Non-Concessional (after-tax)</option>
+              <option value="concessional">Concessional</option>
+              <option value="nonConcessional">Non-Concessional</option>
               <option value="capExempt">Cap-Exempt</option>
             </Select>
           </div>
@@ -288,7 +288,7 @@ export function EventForm({ event, accounts, persons, forecast, settings, onSubm
             The super account's owner determines whose contribution cap this applies to.
           </p>
 
-          {superContributionType === 'concessional' && (superSource === 'salarySacrifice' || superSource === 'personalDeductible') && (
+          {superContributionType === 'concessional' && (superSource === 'salarySacrifice' || superSource === 'personal') && (
             <div className="mt-4">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input

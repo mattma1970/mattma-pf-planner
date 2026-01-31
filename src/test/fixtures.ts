@@ -1,4 +1,16 @@
-import type { Account, Epoch, Person, AssumptionProfile, ResolvedAssumptions } from '../schemas';
+import type { Account, AccountInput, Epoch, Person, AssumptionProfile, ResolvedAssumptions } from '../schemas';
+
+/**
+ * Helper to create an Account with defaults applied.
+ * Use this in tests to create Account objects from partial data.
+ */
+export function createTestAccount(input: AccountInput): Account {
+  return {
+    category: 'standard',
+    includeInNetWorth: true,
+    ...input,
+  } as Account;
+}
 
 export const samplePersons: Person[] = [
   {
@@ -17,7 +29,7 @@ export const samplePersons: Person[] = [
   },
 ];
 
-export const sampleAccounts: Account[] = [
+export const sampleAccounts: AccountInput[] = [
   {
     id: 'aaaa1111-1111-1111-1111-111111111111',
     name: 'Salary Income',

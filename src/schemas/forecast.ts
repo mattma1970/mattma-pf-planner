@@ -6,6 +6,17 @@ export const ResolvedAssumptionsSchema = z.object({
 });
 export type ResolvedAssumptions = z.infer<typeof ResolvedAssumptionsSchema>;
 
+export const ForecastWarningSchema = z.object({
+  type: z.enum(['blockedContribution', 'capExceeded', 'negativeBalance', 'other']),
+  severity: z.enum(['info', 'warning', 'error']),
+  message: z.string(),
+  details: z.string().optional(),
+  personId: z.string().optional(),
+  accountId: z.string().optional(),
+  amount: z.number().optional(),
+});
+export type ForecastWarning = z.infer<typeof ForecastWarningSchema>;
+
 export const OffBalanceSheetItemSchema = z.object({
   id: z.string(),
   type: z.enum([
@@ -60,6 +71,7 @@ export const YearResultSchema = z.object({
   netPosition: z.number(),
   resolvedAssumptions: ResolvedAssumptionsSchema,
   offBalanceSheet: z.array(OffBalanceSheetItemSchema).optional(),
+  warnings: z.array(ForecastWarningSchema).optional(),
 });
 export type YearResult = z.infer<typeof YearResultSchema>;
 
