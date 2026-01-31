@@ -24,7 +24,7 @@ const personColorOptions: { value: PersonColor; bgClass: string }[] = [
 ];
 
 function App() {
-  const { accounts, create: createAccount, update: updateAccount, reorder: reorderAccounts, refresh: refreshAccounts } = useAccounts();
+  const { accounts, create: createAccount, update: updateAccount, remove: removeAccount, reorder: reorderAccounts, refresh: refreshAccounts } = useAccounts();
   const { events, create: createEvent, update: updateEvent, remove: removeEvent, refresh: refreshEvents } = useEvents();
   const { epochs, create: createEpoch, update: updateEpoch, remove: removeEpoch, refresh: refreshEpochs } = useEpochs();
   const { persons, create: createPerson, update: updatePerson, remove: removePerson, refresh: refreshPersons } = usePersons();
@@ -183,6 +183,7 @@ function App() {
         persons={persons}
         settings={settings}
         onSubmit={handleSaveAccount}
+        onDelete={removeAccount}
       />
       <Modal isOpen={showEpochs} onClose={() => setShowEpochs(false)} title="Epochs & Assumptions" size="xl">
         {assumptions && (

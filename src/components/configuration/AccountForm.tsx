@@ -3,6 +3,7 @@ import { Button, Input, Select } from '../ui';
 import type { Account, AccountInput, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType, AssetSubType, SuperPhase } from '../../schemas/account';
 import type { Person } from '../../schemas/person';
 import type { Settings } from '../../schemas/settings';
+import type { AccountReference } from '../../actions/accounts';
 
 interface AccountFormProps {
   account?: Account;
@@ -11,6 +12,7 @@ interface AccountFormProps {
   settings?: Settings;
   onSubmit: (data: Omit<AccountInput, 'id'>) => void;
   onCancel: () => void;
+  onDelete?: () => Promise<{ success: boolean; references?: AccountReference[] }>;
 }
 
 // Check if an account is a tax/off-balance sheet account
@@ -18,11 +20,13 @@ function isTaxAccount(account?: Account): boolean {
   return account?.category !== undefined && account.category !== 'standard';
 }
 
-export function AccountForm({ account, accounts, persons, settings, onSubmit, onCancel }: AccountFormProps) {
+export function AccountForm({ account, accounts, persons, settings, onSubmit, onCancel, onDelete }: AccountFormProps) {
   // If this is a tax account, show a simplified form
   const isTax = isTaxAccount(account);
   const [name, setName] = useState(account?.name ?? '');
   const [type, setType] = useState(account?.type ?? 'income');
+  const [deleteError, setDeleteError] = useState<{ message: string; references: AccountReference[] } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [initialValue, setInitialValue] = useState(account?.initialValue?.toString() ?? '0');
   const [growthType, setGrowthType] = useState<GrowthProfile['type']>(account?.growthProfile?.type ?? 'fixed');
   const [growthRate, setGrowthRate] = useState(() => {
@@ -144,6 +148,25 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
   const requiresFundedBy = type === 'expense' || type === 'liability';
   const requiresIncomeTarget = type === 'asset' && returnRate !== '';
   const requiresTransferTo = endConditionType !== 'none' && (endBehavior === 'transfer' || endBehavior === 'sell' || endBehavior === 'sellNoCgt');
+
+  const handleDelete = async () => {
+    if (!onDelete) return;
+    
+    setIsDeleting(true);
+    setDeleteError(null);
+    
+    try {
+      const result = await onDelete();
+      if (!result.success && result.references) {
+        setDeleteError({
+          message: 'Cannot delete this account because it is referenced by:',
+          references: result.references,
+        });
+      }
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -387,6 +410,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
 
         <Select
           label="Owner"
+          hint="The person who owns this account. Income and capital gains will be attributed to this person for tax calculations."
           value={owner}
           onChange={(e) => setOwner(e.target.value)}
         >
@@ -451,6 +475,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
         <>
           <Select
             label="Deposits To *"
+            hint="The asset account where this income will be deposited each year."
             value={depositsToAccountId}
             onChange={(e) => setDepositsToAccountId(e.target.value)}
           >
@@ -474,6 +499,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       {type === 'expense' && (
         <Select
           label="Funded By *"
+          hint="The asset account that will pay for this expense. Withdrawals will be recorded on that account."
           value={fundedByAccountId}
           onChange={(e) => setFundedByAccountId(e.target.value)}
         >
@@ -487,6 +513,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       {type === 'asset' && (
         <Select
           label="Funded By"
+          hint="If set, the initial value will be withdrawn from this account when the asset starts."
           value={fundedByAccountId}
           onChange={(e) => setFundedByAccountId(e.target.value)}
         >
@@ -552,6 +579,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       {type === 'asset' && (
         <Select
           label="Liquidity"
+          hint="Used for reporting. 'Liquid' assets (e.g., bank accounts, shares) are shown separately in charts to help track easily accessible funds."
           value={liquidityType}
           onChange={(e) => setLiquidityType(e.target.value as LiquidityType | '')}
         >
@@ -735,6 +763,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
           <div className="grid grid-cols-2 gap-4 mt-4">
             <Select
               label="Payments From *"
+              hint="The asset account used to make loan payments. Interest and principal payments will be withdrawn from this account."
               value={fundedByAccountId}
               onChange={(e) => setFundedByAccountId(e.target.value)}
             >
@@ -745,6 +774,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
             </Select>
             <Select
               label="Offset Account"
+              hint="An offset account reduces interest charged. Interest is calculated on: Loan Balance - Offset Balance."
               value={offsetAccountId}
               onChange={(e) => setOffsetAccountId(e.target.value)}
             >
@@ -758,6 +788,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
           <div className="mt-4">
             <Select
               label="Pay Off When Asset Sells"
+              hint="Links this loan to an asset. When the asset is sold (or transferred), the loan will be automatically paid off from the 'Payments From' account."
               value={payoffFromAccountId}
               onChange={(e) => setPayoffFromAccountId(e.target.value)}
             >
@@ -766,9 +797,6 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
             </Select>
-            <p className="text-xs text-gray-500 mt-1">
-              Liability will be paid off when the selected asset is sold
-            </p>
           </div>
         </div>
       )}
@@ -778,6 +806,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
         <div className="grid grid-cols-2 gap-4">
           <Select
             label="Condition Type"
+            hint="When this account becomes active. Before this, the account has no value or flows. Use 'Person Age' for life-event triggers (e.g., retirement)."
             value={startConditionType}
             onChange={(e) => setStartConditionType(e.target.value as typeof startConditionType)}
           >
@@ -801,6 +830,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
         <div className="grid grid-cols-2 gap-4">
           <Select
             label="Condition Type"
+            hint="When this account ends. After this, the 'End Behavior' determines what happens to the value (e.g., transfer, sell, or zero out)."
             value={endConditionType}
             onChange={(e) => setEndConditionType(e.target.value as typeof endConditionType)}
           >
@@ -956,11 +986,43 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
         </div>
       )}
 
-      <div className="flex justify-end gap-2 pt-4 border-t">
-        <Button type="button" variant="secondary" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button type="submit">Save</Button>
+      {deleteError && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <p className="text-sm font-medium text-red-800 mb-2">{deleteError.message}</p>
+          <ul className="text-sm text-red-700 list-disc list-inside space-y-1">
+            {deleteError.references.map((ref, idx) => (
+              <li key={idx}>
+                <span className="font-medium">{ref.name}</span>
+                <span className="text-red-600"> ({ref.type === 'account' ? 'Account' : 'Event'} → {ref.field})</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-red-600 mt-2">
+            Update or delete these references first, then try again.
+          </p>
+        </div>
+      )}
+
+      <div className="flex justify-between pt-4 border-t">
+        <div>
+          {account && onDelete && (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={handleDelete}
+              disabled={isDeleting}
+              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+            >
+              {isDeleting ? 'Deleting...' : 'Delete'}
+            </Button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit">Save</Button>
+        </div>
       </div>
     </form>
   );

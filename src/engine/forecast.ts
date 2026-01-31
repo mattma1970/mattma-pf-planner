@@ -928,11 +928,13 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       const interestRate = account.interestRate ?? 0;
       
       // Calculate effective balance for interest (considering offset account)
+      // Only positive offset balances reduce the effective loan balance
       let effectiveBalance = result.endValue;
       if (account.offsetAccountId) {
         const offsetResult = accountResults.get(account.offsetAccountId);
         if (offsetResult) {
-          effectiveBalance = Math.max(0, result.endValue - offsetResult.endValue);
+          const offsetBalance = Math.max(0, offsetResult.endValue); // Ignore negative balances
+          effectiveBalance = Math.max(0, result.endValue - offsetBalance);
         }
       }
       

@@ -1048,6 +1048,57 @@ describe('calculateForecast', () => {
       expect(bankResult.withdrawals).toBe(0);
     });
 
+    it('negative offset account balance does not increase effective loan balance', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-1010-1010-1010-101010101010',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      // Offset account with negative balance (overdrawn)
+      const offsetAccount = createTestAccount({
+        id: 'offset-1010-1010-1010-101010101010',
+        name: 'Offset',
+        type: 'asset',
+        initialValue: -50000, // Negative balance
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const mortgage = createTestAccount({
+        id: 'mort-1010-1010-1010-101010101010',
+        name: 'Mortgage',
+        type: 'liability',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0.06,
+        paymentType: 'interestOnly',
+        fundedByAccountId: bankAccount.id,
+        offsetAccountId: offsetAccount.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, offsetAccount, mortgage],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const mortResult = result.years[0].accounts.find(a => a.accountId === mortgage.id)!;
+      
+      // Interest should be calculated on the full $100k loan, NOT $150k (loan - negative offset)
+      // 6% of $100,000 = $6,000
+      expect(mortResult.growth).toBe(6000);
+      
+      // Without fix, this would be 6% of $150k = $9,000
+      expect(mortResult.growth).not.toBe(9000);
+    });
+
     it('pays off liability when linked asset sells', () => {
       const bankAccount = createTestAccount({
         id: 'bank-4444-4444-4444-444444444444',

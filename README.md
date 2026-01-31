@@ -68,7 +68,6 @@ src/
 ## Documentation
 
 See the [docs](./docs) folder for:
-- [FAQ.md](./docs/FAQ.md) - Frequently asked questions and how-to guides
 - [PRD.md](./docs/PRD.md) - Product requirements
 - [ARCHITECTURE.md](./docs/ARCHITECTURE.md) - System architecture
 - [TECH_STACK.md](./docs/TECH_STACK.md) - Technology choices

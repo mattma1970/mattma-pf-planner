@@ -303,11 +303,26 @@ Review and update your plan annually with actual figures.
   {
     id: 'faq',
     title: 'FAQ',
-    keywords: ['faq', 'frequently asked', 'questions', 'how to', 'rollover', 'pension', 'transfer'],
+    keywords: ['faq', 'frequently asked', 'questions', 'how to', 'rollover', 'pension', 'transfer', 'delete', 'remove', 'loan', 'payoff', 'offset', 'net worth', 'liability', 'mortgage'],
     content: `
 ## Frequently Asked Questions
 
-### How do I transfer super to a pension at retirement?
+**Jump to:**
+- [Transfer super to pension](#faq-super-pension)
+- [Selling an investment property](#faq-sell-property)
+- [Mortgage offset accounts](#faq-offset)
+- [Expense not growing with inflation](#faq-expense-growth)
+- [One-time bonus or inheritance](#faq-one-time)
+- [Super contribution blocked](#faq-super-blocked)
+- [Dividends with franking credits](#faq-franking)
+- [Delete an account](#faq-delete)
+- [Loan linked to asset sale](#faq-loan-payoff)
+- [Loan not affecting Net Worth](#faq-net-worth)
+- [Tax tracking accounts](#faq-tax-accounts)
+
+---
+
+### How do I transfer super to a pension at retirement? {#faq-super-pension}
 
 To model rolling your super (accumulation phase) into a pension (retirement phase):
 
@@ -328,7 +343,7 @@ To model rolling your super (accumulation phase) into a pension (retirement phas
 
 The pension receives its balance from the transfer.
 
-### How do I model selling an investment property?
+### How do I model selling an investment property? {#faq-sell-property}
 
 - **End Condition**: The year you plan to sell
 - **End Behavior**: Sell
@@ -339,7 +354,7 @@ The pension receives its balance from the transfer.
 
 The capital gain will be calculated and added to your taxable income.
 
-### How do I model a mortgage offset account?
+### How do I model a mortgage offset account? {#faq-offset}
 
 Create both the mortgage and the offset account, then link them:
 
@@ -351,9 +366,13 @@ Create both the mortgage and the offset account, then link them:
 - **Type**: Asset
 - Regular savings/transaction account
 
-Interest is calculated on (mortgage balance - offset balance).
+Interest is calculated on: Loan Balance - Offset Balance
 
-### Why isn't my expense growing with inflation?
+Example: $500,000 mortgage with $100,000 in offset = interest charged on $400,000.
+
+**Note**: Only positive offset balances reduce interest. If your offset goes negative, it won't increase the effective loan balance.
+
+### Why isn't my expense growing with inflation? {#faq-expense-growth}
 
 Check the expense account's growth profile:
 - **CPI-linked**: Will grow with inflation
@@ -361,7 +380,7 @@ Check the expense account's growth profile:
 
 For living expenses, use CPI-linked to model real purchasing power.
 
-### How do I add a one-time bonus or inheritance?
+### How do I add a one-time bonus or inheritance? {#faq-one-time}
 
 Use **Events** for one-time occurrences:
 1. Click **Events** in the toolbar
@@ -369,7 +388,7 @@ Use **Events** for one-time occurrences:
 3. Set the year and amount
 4. Optionally set tax treatment (taxable or tax-free for inheritance)
 
-### Why is my super contribution showing as blocked?
+### Why is my super contribution showing as blocked? {#faq-super-blocked}
 
 Contributions over the cap are blocked. Check:
 - **Concessional cap**: $30,000/year (plus carry-forward if eligible)
@@ -377,7 +396,7 @@ Contributions over the cap are blocked. Check:
 
 Expand the Off-Balance Sheet section to see cap usage and carry-forward amounts.
 
-### How do I model income from dividends with franking credits?
+### How do I model income from dividends with franking credits? {#faq-franking}
 
 For a share portfolio with franked dividends:
 - **Return Rate**: Your expected dividend yield
@@ -385,6 +404,55 @@ For a share portfolio with franked dividends:
 - **Income Target Account**: Where to deposit the dividend income
 
 Franking credits will be calculated and applied as a tax offset.
+
+### How do I delete an account? {#faq-delete}
+
+To delete an account:
+1. Click on the account in the spreadsheet to open the Edit Account modal
+2. Click the **Delete** button at the bottom left of the form
+
+**If the account is referenced by other accounts or events**, you'll see an error listing all the dependencies. You must update or delete those references first, then try again.
+
+References to check:
+- **Account references**: Deposits To, Funded By, Transfer To, Offset Account, Pay Off When Asset Sells, etc.
+- **Event references**: Events using this account as source, target, or affected account
+
+### How do I set up a loan linked to an asset sale? {#faq-loan-payoff}
+
+To automatically pay off a loan when an asset is sold:
+
+**Step 1: Create the Asset**
+- Set **End Condition** to when you plan to sell (year or age)
+- Set **End Behavior** to "Sell" (with CGT) or "Sell (No CGT)" (for personal items/main residence)
+- Set **Transfer To** to your bank account
+
+**Step 2: Create the Liability**
+- Set **Payments From** to your bank account
+- Set **Pay Off When Asset Sells** to the linked asset
+
+**How it works:**
+1. Asset sells → Full proceeds go to your bank account
+2. Loan is paid off → Withdrawal from bank to clear the loan
+3. Liability zeroes out
+
+Both transactions appear as separate line items in the account analysis:
+- Bank receives: +$500,000 (from property sale)
+- Bank pays out: -$200,000 (to pay off mortgage)
+- Net effect: +$300,000
+
+### Why doesn't my loan affect the Net Worth chart? {#faq-net-worth}
+
+Ensure the liability account is correctly configured:
+- Check that **Include in Net Worth** is enabled (default is true)
+- Verify the account type is set to **Liability**
+
+Net Worth = Total Assets - Total Liabilities
+
+Both values are shown in the Calculated Totals section of the spreadsheet view.
+
+### Can I delete tax tracking accounts? {#faq-tax-accounts}
+
+Tax tracking accounts (carry-forward, cap trackers, franking credits) are automatically created for each person. They are managed by the system for tax calculations and should not typically be deleted manually.
 `,
   },
 ];
@@ -506,14 +574,64 @@ function HelpContent({ content, searchQuery }: HelpContentProps) {
   };
 
   const formatText = (text: string): React.ReactNode => {
-    const parts = text.split(/(\*\*[^*]+\*\*)/).filter(Boolean);
+    // First handle links: [text](#anchor) or [text](url)
+    const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
+    const parts: (string | React.ReactNode)[] = [];
+    let lastIndex = 0;
+    let match;
     
-    return parts.map((part, j) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={j}>{highlightText(part.slice(2, -2))}</strong>;
+    while ((match = linkPattern.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(text.slice(lastIndex, match.index));
       }
-      return <span key={j}>{highlightText(part)}</span>;
+      const linkText = match[1];
+      const href = match[2];
+      parts.push(
+        <a
+          key={`link-${match.index}`}
+          href={href}
+          onClick={(e) => {
+            if (href.startsWith('#')) {
+              e.preventDefault();
+              const element = document.getElementById(href.slice(1));
+              element?.scrollIntoView({ behavior: 'smooth' });
+            }
+          }}
+          className="text-blue-600 hover:text-blue-800 hover:underline"
+        >
+          {linkText}
+        </a>
+      );
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < text.length) {
+      parts.push(text.slice(lastIndex));
+    }
+    
+    // If no links found, use the original text
+    const textParts = parts.length > 0 ? parts : [text];
+    
+    // Then handle bold formatting
+    return textParts.map((part, i) => {
+      if (typeof part !== 'string') return part;
+      
+      const boldParts = part.split(/(\*\*[^*]+\*\*)/).filter(Boolean);
+      return boldParts.map((boldPart, j) => {
+        if (boldPart.startsWith('**') && boldPart.endsWith('**')) {
+          return <strong key={`${i}-${j}`}>{highlightText(boldPart.slice(2, -2))}</strong>;
+        }
+        return <span key={`${i}-${j}`}>{highlightText(boldPart)}</span>;
+      });
     });
+  };
+
+  // Extract anchor ID from heading (e.g., "### Title {#anchor-id}")
+  const parseHeading = (text: string): { title: string; id?: string } => {
+    const match = text.match(/^(.+?)\s*\{#([^}]+)\}$/);
+    if (match) {
+      return { title: match[1], id: match[2] };
+    }
+    return { title: text };
   };
 
   return (
@@ -524,17 +642,19 @@ function HelpContent({ content, searchQuery }: HelpContentProps) {
         if (!trimmed) return <div key={i} className="h-2" />;
         
         if (trimmed.startsWith('## ')) {
+          const { title, id } = parseHeading(trimmed.slice(3));
           return (
-            <h2 key={i} className="text-xl font-bold text-gray-900 mt-6 mb-3 first:mt-0">
-              {formatText(trimmed.slice(3))}
+            <h2 key={i} id={id} className="text-xl font-bold text-gray-900 mt-6 mb-3 first:mt-0">
+              {formatText(title)}
             </h2>
           );
         }
         
         if (trimmed.startsWith('### ')) {
+          const { title, id } = parseHeading(trimmed.slice(4));
           return (
-            <h3 key={i} className="text-lg font-semibold text-gray-800 mt-4 mb-2">
-              {formatText(trimmed.slice(4))}
+            <h3 key={i} id={id} className="text-lg font-semibold text-gray-800 mt-4 mb-2">
+              {formatText(title)}
             </h3>
           );
         }

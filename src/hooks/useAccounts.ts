@@ -44,8 +44,11 @@ export function useAccounts() {
   };
 
   const remove = async (id: string) => {
-    await accountActions.deleteAccount(id);
-    await refresh();
+    const result = await accountActions.deleteAccount(id);
+    if (result.success) {
+      await refresh();
+    }
+    return result;
   };
 
   const reorder = async (accountIds: string[]) => {
