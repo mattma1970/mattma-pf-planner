@@ -69,6 +69,37 @@ Run `npm test` after any changes to `src/engine/`.
 
 Tax calculations use 2024-25 Australian brackets (hardcoded in `src/engine/tax.ts`). Future phases will make these configurable.
 
+## Subagent Usage
+
+Use subagents (Task tool) to keep the main thread focused and avoid context overflow:
+
+### When to Use Subagents
+- **Implementation work**: Feature development, bug fixes, refactoring
+- **Investigation/debugging**: Tracing issues across multiple files
+- **Repetitive tasks**: Updating multiple similar files
+- **Independent parallel work**: Tasks that don't depend on each other
+
+### When to Stay in Main Thread
+- **Quick queries**: Simple questions, file lookups, one-liner fixes
+- **Planning/discussion**: Deciding on approach before implementation
+- **Review of subagent results**: Summarizing what was done
+
+### Subagent Best Practices
+1. **Provide full context**: Include file paths, error messages, expected behavior
+2. **Reference handover docs**: Point to `docs/HANDOVER_*.md` for complex features
+3. **Specify verification**: Tell subagent to run `npm test` and `npm run build`
+4. **Request summary**: Ask subagent to return what was changed for the commit message
+
+### Example Prompt Pattern
+```
+Implement [feature/fix]. 
+
+Context: [what the user reported, relevant background]
+Files: [specific files to modify]
+Verification: Run npm test and npm run build
+Return: Summary of changes made
+```
+
 ## Git Workflow
 
 When asked to "commit the changes" or similar:
