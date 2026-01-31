@@ -732,9 +732,12 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           }
         }
         if (account.type === 'asset' && account.fundedByAccountId) {
-          // Only fund actual cash contributions, NOT unrealized growth (appreciation)
-          // Growth is paper value increase - no cash changes hands
-          let fundingAmount = contributions - withdrawals;
+          // Only fund the initial value and user-initiated contributions
+          // Lifecycle transfers (e.g., super to pension) are already funded by their source
+          // Super contributions have their own source accounts
+          // So fundedBy should only cover: initialValue (first year) + other contributions not from transfers
+          const userContributions = contributions - lifecycleContribution - superContributionChange;
+          let fundingAmount = userContributions - withdrawals;
           if (isFirstActiveYear) {
             fundingAmount += account.initialValue;
           }
