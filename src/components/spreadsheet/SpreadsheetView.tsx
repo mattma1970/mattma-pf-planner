@@ -136,6 +136,32 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
     cgtDiscountTracker: 'CGT Discount Tracking',
   };
 
+  // Group off-balance-sheet items by person (for capitalLossCarryForward display)
+  const offBalanceSheetByPerson = useMemo(() => {
+    const byPerson = new Map<string, Map<number, { opening: number; movement: number; closing: number }>>();
+    
+    for (const yearResult of years) {
+      if (!yearResult.offBalanceSheet) continue;
+      
+      for (const item of yearResult.offBalanceSheet) {
+        if (item.type !== 'capitalLossCarryForward') continue;
+        
+        const personId = item.personId ?? 'unassigned';
+        if (!byPerson.has(personId)) {
+          byPerson.set(personId, new Map());
+        }
+        
+        byPerson.get(personId)!.set(yearResult.year, {
+          opening: item.opening ?? 0,
+          movement: item.movement ?? 0,
+          closing: item.closing ?? 0,
+        });
+      }
+    }
+    
+    return byPerson;
+  }, [years]);
+
   // Helper to get account type short label
   const getAccountTypeLabel = (account: typeof accounts[0]): string => {
     if (account.specialConfig?.kind === 'concessionalCarryForward') return 'Concessional Cap';
@@ -1024,6 +1050,73 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                     </tr>
                   </Fragment>
                 ))}
+
+                {/* Capital Loss Carry-Forward for this person (from offBalanceSheet) */}
+                {offBalanceSheetByPerson.has(personId) && (() => {
+                  const capitalLossData = offBalanceSheetByPerson.get(personId)!;
+                  return (
+                    <>
+                      {/* Capital Loss Carry-Forward header */}
+                      <tr className="bg-gray-50">
+                        <td className="px-3 py-1 text-left text-gray-700 text-sm font-medium sticky left-0 bg-gray-50 border-r border-gray-200 min-w-48 pl-6">
+                          Capital Losses C/F
+                        </td>
+                        {years.map((y) => (
+                          <td key={y.year} className="px-3 py-1 text-right text-xs text-gray-400">
+                            {y.year}
+                          </td>
+                        ))}
+                      </tr>
+
+                      {/* Opening Balance */}
+                      <tr className="bg-white">
+                        <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-10">
+                          Opening Balance
+                        </td>
+                        {years.map((y) => {
+                          const data = capitalLossData.get(y.year);
+                          return (
+                            <td key={y.year} className="px-3 py-1 text-right text-sm text-gray-600">
+                              {data ? formatCurrency(data.opening) : '-'}
+                            </td>
+                          );
+                        })}
+                      </tr>
+
+                      {/* Movement (Additions/Deductions) */}
+                      <tr className="bg-white">
+                        <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-10">
+                          ± Movement
+                        </td>
+                        {years.map((y) => {
+                          const data = capitalLossData.get(y.year);
+                          const value = data?.movement ?? 0;
+                          return (
+                            <td key={y.year} className={`px-3 py-1 text-right text-sm ${value !== 0 ? 'text-gray-600' : 'text-gray-400'}`}>
+                              {value !== 0 ? formatCurrency(value) : '-'}
+                            </td>
+                          );
+                        })}
+                      </tr>
+
+                      {/* Closing Balance */}
+                      <tr className="bg-gray-50">
+                        <td className="px-3 py-1 text-left text-gray-800 text-sm font-medium sticky left-0 bg-gray-50 border-r border-gray-200 min-w-48 pl-10">
+                          = Closing Balance
+                        </td>
+                        {years.map((y) => {
+                          const data = capitalLossData.get(y.year);
+                          const value = data?.closing ?? 0;
+                          return (
+                            <td key={y.year} className={`px-3 py-1 text-right text-sm font-medium ${value < 0 ? 'text-red-600' : 'text-gray-800'}`}>
+                              {formatCurrency(value)}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    </>
+                  );
+                })()}
               </Fragment>
             );
           })}

@@ -75,6 +75,7 @@ export type TaxClassification = z.infer<typeof TaxClassificationSchema>;
 export const TaxEventTypeSchema = z.enum([
   'incomeTax',
   'capitalGainsTax',
+  'capitalLoss',
   'superContributionTax',
   'taxDeduction',
   'division293Tax',
@@ -113,6 +114,7 @@ export const TaxEventSchema = z.object({
   discountApplied: z.boolean().optional(),
   costBase: z.number().optional(),
   saleProceeds: z.number().optional(),
+  capitalLossOffset: z.number().optional(),
 });
 export type TaxEvent = z.infer<typeof TaxEventSchema>;
 

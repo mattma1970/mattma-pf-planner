@@ -46,6 +46,12 @@ interface PendingCgtEvent {
   personName?: string;
 }
 
+interface CapitalLossState {
+  personId: string;
+  openingBalance: number;
+  carryForwardBalance: number;
+}
+
 /**
  * Check if a periodic expense should occur in a given year.
  * Returns true if: (year - startYear) is divisible by occursEveryYears
@@ -152,6 +158,16 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
   // Initialize non-concessional cap state (bring-forward tracking)
   // Now reads opening balances from tax accounts if they exist
   let nonConcessionalCapStates = initializeNonConcessionalCapStatesFromAccounts(persons, accounts);
+  
+  // Initialize capital loss carry-forward state per person
+  const capitalLossStates = new Map<string, CapitalLossState>();
+  for (const person of persons) {
+    capitalLossStates.set(person.id, {
+      personId: person.id,
+      openingBalance: 0,
+      carryForwardBalance: 0,
+    });
+  }
 
   for (let year = startYear; year <= endYear; year++) {
     const resolvedAssumptions = resolveAssumptions(assumptions, year, sortedEpochs);
@@ -176,6 +192,12 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     // ===========================================
     // PHASE 1: Calculate opening balances and identify lifecycle transfers
     // ===========================================
+    
+    // Update capital loss carry-forward opening balances for all persons
+    // Opening balance = previous year's closing balance (carryForwardBalance)
+    for (const state of capitalLossStates.values()) {
+      state.openingBalance = state.carryForwardBalance;
+    }
     
     // Capture opening values for all accounts at the start of the year
     // This is used for balance-based expense calculations
@@ -925,7 +947,10 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         const taxableIncome = projectedValue + contributions;
         totalIncome += taxableIncome;
         // Track income per account for itemized tax events (skip tax-free income)
-        if (taxableIncome > 0 && account.incomeTaxTreatment !== 'taxFree') {
+        // Also skip derived income that routes directly to super (superContributionConfig)
+        // as it's not assessable income for the person
+        const isDerivedSuperIncome = !!account.superContributionConfig;
+        if (taxableIncome > 0 && account.incomeTaxTreatment !== 'taxFree' && !isDerivedSuperIncome) {
           const ownerPerson = account.owner ? persons.find(p => p.id === account.owner) : undefined;
           incomeByAccount.push({
             accountId: account.id,
@@ -1240,26 +1265,115 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       }
     }
 
-    // Add CGT events
+    // Process CGT events with capital loss carry-forward
+    // Step 1: Aggregate gains and losses per person for the year
+    const cgtByPerson = new Map<string, { 
+      grossGains: number; 
+      grossLosses: number; 
+      events: PendingCgtEvent[];
+    }>();
+    
     for (const cgtEvent of pendingCgtEvents) {
-      if (cgtEvent.cgtResult.discountedGain > 0) {
-        taxEvents.push({
-          id: uuidv4(),
-          year,
-          type: 'capitalGainsTax',
-          description: `CGT: ${cgtEvent.accountName}`,
-          sourceAccountId: cgtEvent.accountId,
-          sourceAccountName: cgtEvent.accountName,
-          assessableAmount: cgtEvent.cgtResult.discountedGain,
-          fundedFromAccountId: cgtEvent.fundedFromAccountId,
-          fundedFromAccountName: cgtEvent.fundedFromAccountName,
-          personId: cgtEvent.personId,
-          personName: cgtEvent.personName,
-          grossCapitalGain: cgtEvent.cgtResult.grossCapitalGain,
-          discountApplied: cgtEvent.cgtResult.discountApplied,
-          costBase: cgtEvent.cgtResult.costBase,
-          saleProceeds: cgtEvent.cgtResult.saleProceeds,
-        });
+      const personId = cgtEvent.personId ?? 'unassigned';
+      const existing = cgtByPerson.get(personId) ?? { grossGains: 0, grossLosses: 0, events: [] };
+      
+      if (cgtEvent.cgtResult.grossCapitalGain > 0) {
+        existing.grossGains += cgtEvent.cgtResult.grossCapitalGain;
+      } else {
+        const loss = cgtEvent.cgtResult.costBase - cgtEvent.cgtResult.saleProceeds;
+        if (loss > 0) {
+          existing.grossLosses += loss;
+        }
+      }
+      existing.events.push(cgtEvent);
+      cgtByPerson.set(personId, existing);
+    }
+    
+    // Step 2: For each person, apply losses to gains, then carry forward remaining
+    for (const [personId, cgtData] of cgtByPerson) {
+      const capitalLossState = capitalLossStates.get(personId) ?? { 
+        personId, 
+        openingBalance: 0,
+        carryForwardBalance: 0 
+      };
+      // Opening balance was already set at start of year from prior carryForwardBalance
+      const openingLossBalance = capitalLossState.openingBalance;
+      
+      // Total losses available = current year losses + carry-forward
+      const totalLossesAvailable = cgtData.grossLosses + openingLossBalance;
+      
+      // Net position: gains minus total available losses (applied BEFORE discount)
+      const netGainBeforeDiscount = Math.max(0, cgtData.grossGains - totalLossesAvailable);
+      
+      // Losses used this year
+      const lossesUsed = Math.min(totalLossesAvailable, cgtData.grossGains);
+      
+      // Remaining losses to carry forward
+      const newCarryForwardBalance = totalLossesAvailable - lossesUsed;
+      capitalLossState.carryForwardBalance = newCarryForwardBalance;
+      capitalLossStates.set(personId, capitalLossState);
+      
+      // Add capital loss events (for transparency)
+      if (cgtData.grossLosses > 0) {
+        for (const cgtEvent of cgtData.events) {
+          const loss = cgtEvent.cgtResult.costBase - cgtEvent.cgtResult.saleProceeds;
+          if (loss > 0) {
+            taxEvents.push({
+              id: uuidv4(),
+              year,
+              type: 'capitalLoss',
+              description: `Capital Loss: ${cgtEvent.accountName}`,
+              sourceAccountId: cgtEvent.accountId,
+              sourceAccountName: cgtEvent.accountName,
+              assessableAmount: 0, // Losses don't directly affect assessable income
+              fundedFromAccountId: cgtEvent.fundedFromAccountId,
+              fundedFromAccountName: cgtEvent.fundedFromAccountName,
+              personId: cgtEvent.personId,
+              personName: cgtEvent.personName,
+              costBase: cgtEvent.cgtResult.costBase,
+              saleProceeds: cgtEvent.cgtResult.saleProceeds,
+            });
+          }
+        }
+      }
+      
+      // Add CGT events for gains (after applying losses)
+      if (netGainBeforeDiscount > 0 && cgtData.grossGains > 0) {
+        // Calculate proportion of each event's gain that survives after loss offset
+        const gainSurvivalRatio = netGainBeforeDiscount / cgtData.grossGains;
+        
+        for (const cgtEvent of cgtData.events) {
+          if (cgtEvent.cgtResult.grossCapitalGain > 0) {
+            // Apply the survival ratio to get this event's share of net gain
+            const eventNetGain = cgtEvent.cgtResult.grossCapitalGain * gainSurvivalRatio;
+            
+            // Apply CGT discount to the net gain (after losses applied)
+            const discountedGain = cgtEvent.cgtResult.discountApplied 
+              ? eventNetGain * 0.5 
+              : eventNetGain;
+            
+            if (discountedGain > 0) {
+              taxEvents.push({
+                id: uuidv4(),
+                year,
+                type: 'capitalGainsTax',
+                description: `CGT: ${cgtEvent.accountName}`,
+                sourceAccountId: cgtEvent.accountId,
+                sourceAccountName: cgtEvent.accountName,
+                assessableAmount: discountedGain,
+                fundedFromAccountId: cgtEvent.fundedFromAccountId,
+                fundedFromAccountName: cgtEvent.fundedFromAccountName,
+                personId: cgtEvent.personId,
+                personName: cgtEvent.personName,
+                grossCapitalGain: cgtEvent.cgtResult.grossCapitalGain,
+                discountApplied: cgtEvent.cgtResult.discountApplied,
+                costBase: cgtEvent.cgtResult.costBase,
+                saleProceeds: cgtEvent.cgtResult.saleProceeds,
+                capitalLossOffset: lossesUsed > 0 ? lossesUsed * (cgtEvent.cgtResult.grossCapitalGain / cgtData.grossGains) : undefined,
+              });
+            }
+          }
+        }
       }
     }
 
@@ -1731,6 +1845,22 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         if (frankingResult) {
           yearAccounts.push(frankingResult);
         }
+      }
+    }
+    
+    // Add capital loss carry-forward to off-balance sheet
+    for (const [personId, state] of capitalLossStates) {
+      if (state.carryForwardBalance > 0 || state.openingBalance > 0) {
+        const person = persons.find(p => p.id === personId);
+        offBalanceSheet.push({
+          id: `capital-loss-carry-forward-${personId}`,
+          type: 'capitalLossCarryForward',
+          label: person ? `Capital Loss Carry-Forward (${person.name})` : 'Capital Loss Carry-Forward',
+          personId,
+          opening: state.openingBalance,
+          movement: state.carryForwardBalance - state.openingBalance,
+          closing: state.carryForwardBalance,
+        });
       }
     }
 

@@ -1546,6 +1546,218 @@ describe('calculateForecast', () => {
       expect(div293Event!.description).toContain('Div 293');
     });
 
+    it('does NOT apply Division 293 when salary sacrifice brings adjusted income below threshold', () => {
+      // Scenario: $200k salary, $18k salary sacrifice, $23k employer SG
+      // Adjusted income = ($200k - $18k) + $41k = $223k < $250k threshold
+      // Therefore Div 293 should NOT apply
+      const incomeAccount = createTestAccount({
+        id: 'income-1111-1111-1111-111111111111',
+        name: 'High Salary',
+        type: 'income',
+        initialValue: 200000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: bankAccount.id,
+        owner: person.id,
+      });
+
+      const employerSGEvent: Event = {
+        id: 'event-2222-2222-2222-222222222222',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Employer SG',
+        amount: 23000,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'employerSG',
+          memberPersonId: person.id,
+          reducesAssessableIncome: false,
+          exemptFromCap: false,
+        },
+      };
+
+      const salarySacrificeEvent: Event = {
+        id: 'event-3333-3333-3333-333333333333',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Salary Sacrifice',
+        amount: 18000,
+        sourceAccountId: bankAccount.id,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'salarySacrifice',
+          memberPersonId: person.id,
+          reducesAssessableIncome: true,
+          exemptFromCap: false,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [superAccount, bankAccount, incomeAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [employerSGEvent, salarySacrificeEvent],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      
+      // Div 293 should NOT apply since adjusted income ($223k) is below threshold ($250k)
+      const div293Event = year2025.taxEvents.find(e => e.type === 'division293Tax');
+      expect(div293Event).toBeUndefined();
+    });
+
+    it('does not double-count employer SG in Div 293 calculation', () => {
+      // Regression test: Employer SG from derived income accounts was being counted twice:
+      // 1. Added to incomeByPerson as a derived income account
+      // 2. AND included in concessionalWithinCap as a contribution
+      // This caused Div 293 to trigger incorrectly.
+      const salaryAccount = createTestAccount({
+        id: 'salary-1111-1111-1111-111111111111',
+        name: 'Salary',
+        type: 'income',
+        incomeSubType: 'salary',
+        initialValue: 200000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: bankAccount.id,
+        owner: person.id,
+      });
+
+      // Derived employer SG account - 11.5% of salary = $23k
+      const employerSgAccount = createTestAccount({
+        id: 'employer-sg-1111-1111-111111111111',
+        name: 'Employer SG',
+        type: 'income',
+        incomeSubType: 'other',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        basedOnAccountId: salaryAccount.id,
+        basedOnPercentage: 0.115,
+        superContributionConfig: {
+          targetSuperAccountId: superAccount.id,
+          contributionType: 'concessional',
+          source: 'employerSG',
+          reducesAssessableIncome: false,
+        },
+        owner: person.id,
+      });
+
+      const salarySacrificeEvent: Event = {
+        id: 'event-4444-4444-4444-444444444444',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Salary Sacrifice',
+        amount: 18000,
+        sourceAccountId: bankAccount.id,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'salarySacrifice',
+          memberPersonId: person.id,
+          reducesAssessableIncome: true,
+          exemptFromCap: false,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [superAccount, bankAccount, salaryAccount, employerSgAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [salarySacrificeEvent],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+
+      // Div 293 should NOT apply because:
+      // - Taxable income = $200k (employer SG excluded - it's a contribution, not income)
+      // - Salary sacrifice deduction = -$18k
+      // - Taxable income after deduction = $182k
+      // - Concessional contributions = $23k (employer SG) + $18k (salary sacrifice) = $41k
+      // - Adjusted income for Div 293 = $182k + $41k = $223k < $250k threshold
+      const div293Event = year2025.taxEvents.find(e => e.type === 'division293Tax');
+      expect(div293Event).toBeUndefined();
+    });
+
+    it('applies Div 293 when income plus contributions exceed threshold', () => {
+      // Contrasting test: Same structure but higher income that DOES trigger Div 293
+      const salaryAccount = createTestAccount({
+        id: 'salary-1111-1111-1111-111111111111',
+        name: 'Salary',
+        type: 'income',
+        incomeSubType: 'salary',
+        initialValue: 240000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: bankAccount.id,
+        owner: person.id,
+      });
+
+      // Derived employer SG account - 11.5% of salary = $27,600
+      const employerSgAccount = createTestAccount({
+        id: 'employer-sg-1111-1111-111111111111',
+        name: 'Employer SG',
+        type: 'income',
+        incomeSubType: 'other',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        basedOnAccountId: salaryAccount.id,
+        basedOnPercentage: 0.115,
+        superContributionConfig: {
+          targetSuperAccountId: superAccount.id,
+          contributionType: 'concessional',
+          source: 'employerSG',
+          reducesAssessableIncome: false,
+        },
+        owner: person.id,
+      });
+
+      const salarySacrificeEvent: Event = {
+        id: 'event-4444-4444-4444-444444444444',
+        year: 2025,
+        type: 'superContribution',
+        description: 'Salary Sacrifice',
+        amount: 20000,
+        sourceAccountId: bankAccount.id,
+        targetAccountId: superAccount.id,
+        superContribution: {
+          contributionType: 'concessional',
+          source: 'salarySacrifice',
+          memberPersonId: person.id,
+          reducesAssessableIncome: true,
+          exemptFromCap: false,
+        },
+      };
+
+      const result = calculateForecast({
+        accounts: [superAccount, bankAccount, salaryAccount, employerSgAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [salarySacrificeEvent],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+
+      // Div 293 SHOULD apply because:
+      // - Taxable income = $240k (employer SG excluded - it's not assessable income)
+      // - Concessional contributions within cap = $27.6k (employer SG) + capped amount
+      //   Note: $27.6k + $20k = $47.6k, but cap is $30k, so concessional within cap = $30k
+      // - Adjusted income for Div 293 = $240k + $30k = $270k > $250k threshold
+      const div293Event = year2025.taxEvents.find(e => e.type === 'division293Tax');
+      expect(div293Event).toBeDefined();
+      expect(div293Event!.description).toContain('Div 293');
+    });
+
     it('deducts salary sacrifice from source account and adds to super', () => {
       const contributionEvent: Event = {
         id: 'event-3333-3333-3333-333333333333',
@@ -2770,6 +2982,314 @@ describe('calculateForecast', () => {
       const year2025 = result.years.find((y) => y.year === 2025)!;
       const sgWarnings = year2025.warnings?.filter(w => w.type === 'incompleteEmployerSg') ?? [];
       expect(sgWarnings.length).toBe(0);
+    });
+  });
+
+  describe('capital loss carry-forward', () => {
+    const person: Person = {
+      id: 'person-1111-1111-1111-111111111111',
+      name: 'Test Person',
+      birthYear: 1980,
+    };
+
+    const cashAccount = createTestAccount({
+      id: 'cash-1111-1111-1111-111111111111',
+      name: 'Cash',
+      type: 'asset',
+      initialValue: 500000,
+      growthProfile: { type: 'fixed', rate: 0 },
+    });
+
+    it('capital loss is carried forward when no gains in year', () => {
+      const losingAsset = createTestAccount({
+        id: 'asset-1111-1111-1111-111111111111',
+        name: 'Losing Asset',
+        type: 'asset',
+        initialValue: 70000,
+        costBase: 100000,
+        owner: person.id,
+        growthProfile: { type: 'fixed', rate: 0 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sell',
+        transferToAccountId: cashAccount.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [losingAsset, cashAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2026,
+      });
+
+      const year2025 = result.years.find(y => y.year === 2025)!;
+      
+      const losingAssetResult = year2025.accounts.find(a => a.accountId === losingAsset.id);
+      expect(losingAssetResult?.endValue).toBe(0);
+      
+      const lossCarryForward = year2025.offBalanceSheet?.find(i => i.type === 'capitalLossCarryForward');
+      expect(lossCarryForward).toBeDefined();
+      expect(lossCarryForward!.closing).toBe(30000);
+      expect(lossCarryForward!.personId).toBe(person.id);
+    });
+
+    it('capital loss offsets gain in same year', () => {
+      const losingAsset = createTestAccount({
+        id: 'asset-1111-1111-1111-111111111111',
+        name: 'Losing Asset',
+        type: 'asset',
+        initialValue: 100000,
+        costBase: 100000,
+        owner: person.id,
+        growthProfile: { type: 'fixed', rate: 0 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sell',
+        transferToAccountId: cashAccount.id,
+      });
+      
+      const gainingAsset = createTestAccount({
+        id: 'asset-2222-2222-2222-222222222222',
+        name: 'Gaining Asset',
+        type: 'asset',
+        initialValue: 100000,
+        costBase: 50000,
+        owner: person.id,
+        growthProfile: { type: 'fixed', rate: 0 },
+        eligibleForCgtDiscount: true,
+        startCondition: { type: 'year', year: 2020 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sell',
+        transferToAccountId: cashAccount.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [losingAsset, gainingAsset, cashAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2026,
+      });
+
+      const year2025 = result.years.find(y => y.year === 2025)!;
+      
+      const gainEvents = year2025.taxEvents.filter(e => e.type === 'capitalGainsTax');
+      expect(gainEvents.length).toBe(1);
+      
+      const lossCarryForward = year2025.offBalanceSheet?.find(i => i.type === 'capitalLossCarryForward');
+      expect(lossCarryForward).toBeUndefined();
+    });
+
+    it('partial loss offset - loss less than gain', () => {
+      const smallLosingAsset = createTestAccount({
+        id: 'asset-1111-1111-1111-111111111111',
+        name: 'Small Losing Asset',
+        type: 'asset',
+        initialValue: 40000,
+        costBase: 50000,
+        owner: person.id,
+        growthProfile: { type: 'fixed', rate: 0 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sell',
+        transferToAccountId: cashAccount.id,
+      });
+      
+      const gainingAsset = createTestAccount({
+        id: 'asset-2222-2222-2222-222222222222',
+        name: 'Gaining Asset',
+        type: 'asset',
+        initialValue: 100000,
+        costBase: 50000,
+        owner: person.id,
+        growthProfile: { type: 'fixed', rate: 0 },
+        eligibleForCgtDiscount: true,
+        startCondition: { type: 'year', year: 2020 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sell',
+        transferToAccountId: cashAccount.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [smallLosingAsset, gainingAsset, cashAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2026,
+      });
+
+      const year2025 = result.years.find(y => y.year === 2025)!;
+      
+      const gainEvent = year2025.taxEvents.find(e => e.type === 'capitalGainsTax');
+      expect(gainEvent).toBeDefined();
+      expect(gainEvent!.assessableAmount).toBe(20000);
+      
+      const lossCarryForward = year2025.offBalanceSheet?.find(i => i.type === 'capitalLossCarryForward');
+      expect(lossCarryForward).toBeUndefined();
+    });
+
+    it('full loss offset - loss greater than gain, remainder carried forward', () => {
+      const largeLosingAsset = createTestAccount({
+        id: 'asset-1111-1111-1111-111111111111',
+        name: 'Large Losing Asset',
+        type: 'asset',
+        initialValue: 50000,
+        costBase: 150000,
+        owner: person.id,
+        growthProfile: { type: 'fixed', rate: 0 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sell',
+        transferToAccountId: cashAccount.id,
+      });
+      
+      const gainingAsset = createTestAccount({
+        id: 'asset-2222-2222-2222-222222222222',
+        name: 'Gaining Asset',
+        type: 'asset',
+        initialValue: 100000,
+        costBase: 50000,
+        owner: person.id,
+        growthProfile: { type: 'fixed', rate: 0 },
+        eligibleForCgtDiscount: true,
+        startCondition: { type: 'year', year: 2020 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sell',
+        transferToAccountId: cashAccount.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [largeLosingAsset, gainingAsset, cashAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2026,
+      });
+
+      const year2025 = result.years.find(y => y.year === 2025)!;
+      
+      const gainEvent = year2025.taxEvents.find(e => e.type === 'capitalGainsTax');
+      expect(gainEvent).toBeUndefined();
+      
+      const lossCarryForward = year2025.offBalanceSheet?.find(i => i.type === 'capitalLossCarryForward');
+      expect(lossCarryForward).toBeDefined();
+      expect(lossCarryForward!.closing).toBe(50000);
+    });
+
+    it('loss applied before 50% CGT discount', () => {
+      const losingAsset = createTestAccount({
+        id: 'asset-1111-1111-1111-111111111111',
+        name: 'Losing Asset',
+        type: 'asset',
+        initialValue: 60000,
+        costBase: 80000,
+        owner: person.id,
+        growthProfile: { type: 'fixed', rate: 0 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sell',
+        transferToAccountId: cashAccount.id,
+      });
+      
+      const gainingAsset = createTestAccount({
+        id: 'asset-2222-2222-2222-222222222222',
+        name: 'Gaining Asset',
+        type: 'asset',
+        initialValue: 100000,
+        costBase: 50000,
+        owner: person.id,
+        growthProfile: { type: 'fixed', rate: 0 },
+        eligibleForCgtDiscount: true,
+        startCondition: { type: 'year', year: 2020 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sell',
+        transferToAccountId: cashAccount.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [losingAsset, gainingAsset, cashAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2026,
+      });
+
+      const year2025 = result.years.find(y => y.year === 2025)!;
+      
+      const gainEvent = year2025.taxEvents.find(e => e.type === 'capitalGainsTax');
+      expect(gainEvent).toBeDefined();
+      expect(gainEvent!.assessableAmount).toBe(15000);
+    });
+
+    it('multi-year carry-forward of capital losses', () => {
+      const losingAsset = createTestAccount({
+        id: 'asset-1111-1111-1111-111111111111',
+        name: 'Losing Asset',
+        type: 'asset',
+        initialValue: 60000,
+        costBase: 100000,
+        owner: person.id,
+        growthProfile: { type: 'fixed', rate: 0 },
+        endCondition: { type: 'year', year: 2025 },
+        endBehavior: 'sell',
+        transferToAccountId: cashAccount.id,
+      });
+      
+      const futureGainingAsset = createTestAccount({
+        id: 'asset-2222-2222-2222-222222222222',
+        name: 'Future Gaining Asset',
+        type: 'asset',
+        initialValue: 100000,
+        costBase: 80000,
+        owner: person.id,
+        growthProfile: { type: 'fixed', rate: 0 },
+        eligibleForCgtDiscount: true,
+        startCondition: { type: 'year', year: 2020 },
+        endCondition: { type: 'year', year: 2027 },
+        endBehavior: 'sell',
+        transferToAccountId: cashAccount.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [losingAsset, futureGainingAsset, cashAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2028,
+      });
+
+      const year2025 = result.years.find(y => y.year === 2025)!;
+      const lossCarryForward2025 = year2025.offBalanceSheet?.find(i => i.type === 'capitalLossCarryForward');
+      expect(lossCarryForward2025).toBeDefined();
+      expect(lossCarryForward2025!.closing).toBe(40000);
+      
+      const year2026 = result.years.find(y => y.year === 2026)!;
+      const lossCarryForward2026 = year2026.offBalanceSheet?.find(i => i.type === 'capitalLossCarryForward');
+      expect(lossCarryForward2026).toBeDefined();
+      expect(lossCarryForward2026!.closing).toBe(40000);
+      
+      const year2027 = result.years.find(y => y.year === 2027)!;
+      
+      const gainEvent = year2027.taxEvents.find(e => e.type === 'capitalGainsTax');
+      expect(gainEvent).toBeUndefined();
+      
+      const lossCarryForward2027 = year2027.offBalanceSheet?.find(i => i.type === 'capitalLossCarryForward');
+      expect(lossCarryForward2027).toBeDefined();
+      expect(lossCarryForward2027!.closing).toBe(20000);
     });
   });
 });

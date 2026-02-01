@@ -205,7 +205,7 @@ Events can be:
   {
     id: 'tax',
     title: 'Tax',
-    keywords: ['tax', 'income tax', 'capital gains', 'cgt', 'super', 'franking', 'deductions'],
+    keywords: ['tax', 'income tax', 'capital gains', 'cgt', 'super', 'franking', 'deductions', 'capital loss', 'carry-forward'],
     content: `
 ## Tax Calculations
 
@@ -224,6 +224,21 @@ The planner calculates Australian income tax including:
 ### Capital Gains Tax
 - 50% CGT discount for assets held >12 months
 - Added to assessable income
+
+### Capital Loss Carry-Forward
+When you sell an asset at a loss, the loss is tracked and carried forward:
+- Losses automatically offset capital gains in the same year
+- Unused losses carry forward indefinitely to offset future gains
+- Losses are applied **before** the 50% CGT discount
+- Capital losses cannot reduce other income (salary, dividends)
+- The capital loss balance is shown in the off-balance-sheet section
+
+**Example:**
+- Year 1: Sell shares at $10,000 loss → $10,000 added to capital loss balance
+- Year 2: Sell property with $30,000 capital gain (held 2+ years)
+- Apply $10,000 loss → $20,000 remaining gain
+- Apply 50% discount → $10,000 taxable
+- Without the loss: $30,000 × 50% = $15,000 taxable
 
 ### Franking Credits
 - Dividend imputation credits

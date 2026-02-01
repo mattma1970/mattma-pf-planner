@@ -24,6 +24,7 @@ export const OffBalanceSheetItemSchema = z.object({
     'frankingCredits',
     'concessionalCapAccount',
     'nonConcessionalCapAccount',
+    'capitalLossCarryForward',
   ]),
   label: z.string(),
   personId: z.string().optional(),

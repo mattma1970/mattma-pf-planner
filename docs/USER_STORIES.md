@@ -897,6 +897,37 @@ And: Summary shows "78% chance of maintaining positive net worth to age 99"
 
 ---
 
+---
+
+### US-14.0: Capital Loss Carry-Forward
+**As a** user  
+**I want to** have capital losses from asset sales carried forward and offset against future capital gains  
+**So that** my tax calculations accurately reflect Australian CGT rules
+
+**Acceptance Criteria:**
+- [ ] Capital losses are tracked per person
+- [ ] Losses offset gains in the same year first
+- [ ] Unused losses carry forward to future years indefinitely
+- [ ] Losses are applied before the 50% CGT discount
+- [ ] Loss balance is visible in the off-balance-sheet section
+- [ ] Loss usage is tracked in tax events for transparency
+
+**Test Case:**
+```
+Given: Year 1 - sell asset for $50,000 loss
+Then: Capital loss balance = $50,000, no CGT payable
+
+Given: Year 2 - capital loss balance = $50,000
+And: Sell asset for $80,000 gain (held 2 years)
+Then: Offset $50,000 loss → remaining gain = $30,000
+And: Apply 50% discount → assessable gain = $15,000
+And: Capital loss balance = $0
+```
+
+**See also:** [HANDOVER_CAPITAL_LOSSES.md](./HANDOVER_CAPITAL_LOSSES.md)
+
+---
+
 ## Phase 3: Multi-Person (Future)
 
 ### US-P3.1: Add a second person
