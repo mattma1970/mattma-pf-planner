@@ -161,6 +161,7 @@ function App() {
               events={events as unknown as Event[]}
               showEventHighlights={showEventHighlights}
               eventHighlightColor={settings.eventHighlightColor}
+              sectionHeaderColor={settings.sectionHeaderColor}
               onAccountClick={handleAccountClick}
               onReorder={(_type, accountIds) => reorderAccounts(accountIds)}
             />
@@ -446,6 +447,23 @@ function App() {
               />
               <span className="text-sm text-gray-500">{settings.eventHighlightColor}</span>
             </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Section Header Color
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={settings.sectionHeaderColor ?? '#3b82f6'}
+                onChange={(e) => updateSettings({ sectionHeaderColor: e.target.value })}
+                className="h-10 w-20 rounded border border-gray-300 cursor-pointer"
+              />
+              <span className="text-sm text-gray-500">{settings.sectionHeaderColor ?? '#3b82f6'}</span>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Background color for section headers (Account, Details, Calculated Totals)
+            </p>
           </div>
 
           {/* Tax Settings */}

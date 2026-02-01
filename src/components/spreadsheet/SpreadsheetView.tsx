@@ -33,6 +33,7 @@ interface SpreadsheetViewProps {
   events?: Event[];
   showEventHighlights?: boolean;
   eventHighlightColor?: string;
+  sectionHeaderColor?: string;
   onAccountClick?: (accountId: string) => void;
   onReorder?: (type: AccountType, accountIds: string[]) => void;
 }
@@ -64,7 +65,7 @@ interface TaxDetailState {
   taxEvents: TaxEvent[];
 }
 
-export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [], events = [], showEventHighlights = false, eventHighlightColor, onAccountClick, onReorder }: SpreadsheetViewProps) {
+export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [], events = [], showEventHighlights = false, eventHighlightColor, sectionHeaderColor = '#3b82f6', onAccountClick, onReorder }: SpreadsheetViewProps) {
   const years = forecast?.years ?? [];
   const [selectedTaxDetail, setSelectedTaxDetail] = useState<TaxDetailState | null>(null);
   const [isTaxExpanded, setIsTaxExpanded] = useState(false);
@@ -345,15 +346,18 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
       <WarningsPanel years={years} />
       <div className="overflow-x-auto border border-gray-200 rounded-lg">
       <table className="min-w-full divide-y divide-gray-200">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sticky left-0 bg-gray-50 border-r border-gray-200 z-10 min-w-48">
-              Account
+        <thead>
+          <tr style={{ backgroundColor: sectionHeaderColor }}>
+            <th 
+              className="px-3 py-3 text-left text-xs font-medium text-white uppercase tracking-wider sticky left-0 border-r border-gray-200 z-10 min-w-48"
+              style={{ backgroundColor: sectionHeaderColor }}
+            >
+              Accounts
             </th>
             {years.map((y) => (
               <th
                 key={y.year}
-                className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"
+                className="px-3 py-3 text-right text-xs font-medium text-white uppercase tracking-wider"
               >
                 {y.year}
               </th>
@@ -487,12 +491,13 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
 
           {taxByPersonDetailed.personIds.length > 0 && (
             <>
-              <tr className="bg-amber-50">
+              <tr style={{ backgroundColor: sectionHeaderColor }}>
                 <th
                   colSpan={colSpan}
-                  className="px-3 py-2 text-left font-semibold text-amber-800 sticky left-0 bg-amber-50"
+                  className="px-3 py-2 text-left font-semibold text-white sticky left-0"
+                  style={{ backgroundColor: sectionHeaderColor }}
                 >
-                  Tax
+                  Details
                 </th>
               </tr>
               
@@ -1121,10 +1126,11 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
             );
           })}
 
-          <tr className="bg-gray-100">
+          <tr style={{ backgroundColor: sectionHeaderColor }}>
             <th
               colSpan={colSpan}
-              className="px-3 py-2 text-left font-semibold text-gray-700 sticky left-0 bg-gray-100"
+              className="px-3 py-2 text-left font-semibold text-white sticky left-0"
+              style={{ backgroundColor: sectionHeaderColor }}
             >
               Calculated Totals
             </th>

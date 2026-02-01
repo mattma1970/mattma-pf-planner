@@ -47,6 +47,37 @@ npm test           # Run all tests
 npm run test:watch # Watch mode
 ```
 
+## Running on Windows
+
+### Prerequisites
+
+1. **Install Node.js**: Download and install Node.js 20+ from [nodejs.org](https://nodejs.org/)
+2. **Install Git** (optional): Download from [git-scm.com](https://git-scm.com/download/win)
+
+### Setup
+
+Open PowerShell or Command Prompt and run:
+
+```powershell
+# Clone the repository (if using Git)
+git clone https://github.com/canvanauts/mattma-pf-planner.git
+cd mattma-pf-planner
+
+# Install dependencies
+npm install
+
+# Start the development server
+npm run dev
+```
+
+Open http://localhost:5173 in your browser.
+
+### Troubleshooting
+
+- **npm not recognized**: Ensure Node.js is added to your PATH. Restart your terminal after installing Node.js.
+- **Permission errors**: Run PowerShell as Administrator, or use `npm config set prefix` to change the global install location.
+- **Port 5173 in use**: The dev server will automatically try the next available port.
+
 ## Project Structure
 
 ```
