@@ -78,11 +78,21 @@ Want me to create scenarios for any of these options?
 
 ## 2. Architecture Overview
 
-The PF Assistant architecture builds on the existing Actions Layer, making every UI action available to the AI through function calling.
+The PF Assistant uses a **client-server architecture** where the React frontend communicates with a lightweight Hono server that handles LLM API calls. This is required because the Vercel AI SDK is designed for server-side use.
+
+**Why Hono over Express:**
+- Nearly identical API to Express (easy to learn)
+- Portable: same code runs on Node.js locally AND Cloudflare Workers in production
+- Future-proof: start simple, scale globally without rewriting
+- First-class TypeScript support
+
+The app supports two modes:
+- **Local-only mode**: Full functionality without AI assistant (no server required)
+- **AI mode**: Requires the Hono server to be running for assistant features
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          Browser                                      │
+│                          Browser (Vite + React)                        │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
@@ -94,72 +104,157 @@ The PF Assistant architecture builds on the existing Actions Layer, making every
 │                   │                                                    │
 │                   ▼                                                    │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │  AI Client (Vercel AI SDK + Custom Local Adapter)                 │   │
-│  │  - Manages LLM conversation state                                │   │
-│  │  - Handles tool/function calling                                 │   │
-│  │  - Streams responses to UI                                      │   │
-│  │  - Supports: OpenAI, Anthropic, Local (Ollama, vLLM)          │   │
+│  │  AI Client (useChat hook from Vercel AI SDK)                     │   │
+│  │  - Manages conversation state                                    │   │
+│  │  - Streams responses from server                                 │   │
+│  │  - Handles tool call results                                     │   │
 │  └────────────────┬─────────────────────────────────────────────────┘   │
 │                   │                                                    │
+│                   │ HTTP POST /api/chat                                │
 │                   ▼                                                    │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │  Context Builder                                               │   │
+│  │  Context Builder (runs in browser)                              │   │
 │  │  - Gathers current state (accounts, forecast, settings)           │   │
 │  │  - Formats for LLM consumption                                  │   │
 │  │  - Manages token budget (summarization when needed)             │   │
+│  │  - Sends context with each request                              │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  Actions Layer (Existing) + Query Layer (New)                    │   │
+│  │  - Tool calls execute here in browser                            │   │
+│  │  - Results sent back to server for next LLM turn                 │   │
 │  └────────────────┬─────────────────────────────────────────────────┘   │
 │                   │                                                    │
-│  ┌───────────────┴───────────────┐                                    │
-│  │                               │                                    │
-│  ▼                               ▼                                    │
+│                   ▼                                                    │
 │  ┌─────────────────┐       ┌─────────────────┐                          │
-│  │  Actions Layer │       │  Query Layer    │   (Future)                │
-│  │  (Existing)    │       │  (New)          │                          │
-│  │  - accounts    │       │  - analyze      │                          │
-│  │  - events      │       │  - summarize    │                          │
-│  │  - epochs      │       │  - compare      │                          │
-│  │  - forecast    │       │  - suggest      │                          │
-│  └────────┬────────┘       └─────────────────┘                          │
-│           │                                                          │
-│           ▼                                                          │
-│  ┌─────────────────┐                                                    │
-│  │  Engine Layer  │                                                    │
-│  │  (Existing)    │                                                    │
-│  └────────┬────────┘                                                    │
-│           │                                                          │
-│           ▼                                                          │
-│  ┌─────────────────┐                                                    │
-│  │  Data Layer    │                                                    │
-│  │  (IndexedDB)   │                                                    │
-│  └─────────────────┘                                                    │
+│  │  Engine Layer  │       │  Data Layer    │                          │
+│  │  (Existing)    │       │  (IndexedDB)   │                          │
+│  └─────────────────┘       └─────────────────┘                          │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
                               │
-                              │ HTTPS (Optional)
-                               ▼
+                              │ HTTPS
+                              ▼
  ┌─────────────────────────────────────────────────────────────────────────┐
- │  Backend API (Future Phase)                                            │
+ │  Hono Server (Phase 1) — Required for AI Mode                          │
  ├─────────────────────────────────────────────────────────────────────────┤
- │  - Cloud storage (optional alternative to IndexedDB)                         │
+ │  POST /api/chat                                                        │
+ │  - Receives messages + context from client                             │
+ │  - Calls LLM via Vercel AI SDK (streamText)                           │
+ │  - Streams response back to client                                     │
+ │  - Handles tool definitions                                            │
+ │                                                                         │
+ │  Environment:                                                          │
+ │  - OPENAI_API_KEY or ANTHROPIC_API_KEY (server-side, secure)          │
+ └─────────────────────────────────────────────────────────────────────────┘
+                              │
+                              │ Future: Cloud storage, auth
+                              ▼
+ ┌─────────────────────────────────────────────────────────────────────────┐
+ │  Backend Expansion (Future Phase)                                      │
+ ├─────────────────────────────────────────────────────────────────────────┤
+ │  - Cloud storage (optional alternative to IndexedDB)                   │
  │  - User authentication                                                  │
- │  - LLM API key management (convenience feature)                          │
+ │  - Multi-device access                                                  │
  └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Architectural Decisions
 
-#### 2.1 Client-First (Phase 1)
+#### 2.1 Two Operating Modes
 
-**Why:** The app is designed to work offline with IndexedDB. Running the AI client-side maintains this property.
+The app supports both local-only and AI-assisted usage:
 
-**Trade-offs:**
-- ✅ No backend required
-- ✅ Data never leaves user's device
-- ✅ Works offline (except AI calls)
-- ❌ LLM API keys must be stored in client (user provides their own)
-- ❌ No server-side optimization/caching
+| Mode | Server Required | Features |
+|------|-----------------|----------|
+| **Local-only** | ❌ No | Full UI, all financial planning features, no assistant |
+| **AI Mode** | ✅ Yes | Everything above + natural language assistant |
 
-#### 2.2 Function Calling over Prompt Injection
+**Why this approach:**
+- Maintains offline capability for core features
+- Users who don't want/need AI can use the app without any server
+- Clean separation of concerns
+- API keys stored server-side (more secure than client storage)
+
+#### 2.2 Hono Server (Phase 1)
+
+**Why Hono:**
+- Nearly identical API to Express (minimal learning curve)
+- Portable: runs on Node.js, Bun, Deno, Cloudflare Workers, Vercel Edge
+- Start on Node.js locally, deploy to Cloudflare Workers for scale — zero code changes
+- First-class TypeScript support
+- Works with Vercel AI SDK
+
+**Development setup:**
+```bash
+# Single command starts both client and server
+npm run dev
+# → Vite on :5173, Hono on :3001
+```
+
+**Scaling path:**
+
+| Stage | Runtime | Hosting | When |
+|-------|---------|---------|------|
+| **Phase 1** | Node.js | Railway or Render | Now (simple, cheap) |
+| **Scale** | Cloudflare Workers | Cloudflare | When you need global edge |
+| **Alternative** | Bun | Fly.io | If you want Bun's performance |
+
+**Production hosting options:**
+
+| Platform | Effort | Cost | Notes |
+|----------|--------|------|-------|
+| Railway | Git push | Free tier, then ~$5/mo | Recommended to start |
+| Render | Git push | Free tier, then ~$5/mo | Good alternative |
+| Cloudflare Workers | `wrangler deploy` | 100K req/day free | Global edge, ~0ms cold starts |
+| Fly.io | CLI deploy | Usage-based | Good for Bun runtime |
+
+**Example server code:**
+
+```typescript
+// server/index.ts
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+const app = new Hono();
+app.use('/*', cors());
+
+app.post('/api/chat', async (c) => {
+  const { messages, tools } = await c.req.json();
+  
+  const result = streamText({
+    model: openai('gpt-4o'),
+    messages,
+    tools,
+  });
+  
+  return result.toDataStreamResponse();
+});
+
+export default app;
+```
+
+#### 2.3 API Key Security
+
+With server-side architecture, API keys are stored securely:
+
+- ✅ Keys in server environment variables (not exposed to browser)
+- ✅ No client-side key storage needed
+- ✅ Keys never sent to client
+- ✅ Standard security model
+
+```typescript
+// server/.env (never committed)
+OPENAI_API_KEY=sk-...
+
+// server/index.ts
+const model = openai('gpt-4o'); // Uses env var automatically
+```
+
+#### 2.4 Function Calling over Prompt Injection
 
 **Why:** The existing Actions Layer is designed for LLM integration. Each action has clear parameters (via Zod schemas) and can be exposed as tools.
 
@@ -207,7 +302,7 @@ export function getToolSchemas() {
 }
 ```
 
-#### 2.3 Context Management
+#### 2.5 Context Management
 
 The AI needs context about the current state to make informed decisions. We'll build a context layer that:
 
@@ -247,7 +342,7 @@ export async function buildContext(limitTokens: number = 8000): Promise<AIContex
 }
 ```
 
-#### 2.4 Tool Call Visualization
+#### 2.6 Tool Call Visualization
 
 Users must see exactly what the AI is doing. Every tool call is displayed in the chat:
 
@@ -1486,7 +1581,7 @@ export async function chatWithAI(
 
 ---
 
-## 7. Implementation Phases
+## 8. Implementation Phases
 
 ### Phase 1: Foundation (4-6 weeks)
 
@@ -1494,20 +1589,34 @@ export async function chatWithAI(
 
 | Task | Description |
 |------|-------------|
-| AI Client Setup | Integrate Vercel AI SDK, basic chat UI |
+| Hono Server Setup | Create `server/` folder with Hono + Vercel AI SDK |
+| Dev Script | `npm run dev` starts both Vite and Hono via concurrently |
+| AI Client Setup | Integrate Vercel AI SDK `useChat` hook in React |
+| Chat UI | Basic chat panel with message history |
 | Tool Export | Generate tool schemas from existing actions |
 | Context Builder | Summarize current state for LLM |
 | Account Tools | Wire up account CRUD actions |
 | Basic Forecast | Run forecast and return summary |
-| Local Model Support | Add Ollama/vLLM adapter, auto-detection, and configuration UI |
+| Production Deployment | Deploy Hono server to Railway (Node.js) |
 
 **Deliverables:**
+- Hono server with `/api/chat` endpoint
 - Chat panel with message history
 - AI can create/update/delete accounts
 - AI can run basic forecasts
 - Tool call visualization
-- Support for OpenAI, Anthropic, and local LLM providers
-- Auto-detection of local model servers (Ollama, vLLM)
+- Single `npm run dev` command for local development
+- Production deployment guide (Railway initially, Cloudflare Workers for scale)
+
+**Phase 1b: Local Model Support (optional, 1-2 weeks)**
+
+| Task | Description |
+|------|-------------|
+| Local LLM Adapter | Add Ollama/vLLM support via OpenAI-compatible API |
+| Auto-detection | Detect local model servers |
+| Configuration UI | Settings panel for local model configuration |
+
+This is optional and can be deferred if cloud API (OpenAI/Anthropic) is sufficient.
 
 ### Phase 2: Scenarios & Assumptions (3-4 weeks)
 
@@ -1569,9 +1678,9 @@ export async function chatWithAI(
 
 ---
 
-## 8. Key Considerations
+## 9. Key Considerations
 
-### 8.1 Privacy & Security
+### 9.1 Privacy & Security
 
 **Cloud providers (OpenAI, Anthropic):**
 - User provides their own API key (stored in IndexedDB)
@@ -1590,7 +1699,7 @@ export async function chatWithAI(
 - Clear privacy policy
 - User control over data export/deletion
 
-### 8.2 Model Selection & Performance
+### 9.2 Model Selection & Performance
 
 Choosing the right model is critical for user experience:
 
@@ -1657,7 +1766,7 @@ export async function selectBestAvailableModel(
 }
 ```
 
-### 8.3 Streaming Support
+### 9.3 Streaming Support
 
 Both cloud and local LLMs support streaming responses, providing a better user experience:
 
@@ -1763,7 +1872,7 @@ function StreamingMessage() {
 }
 ```
 
-### 8.4 Offline Capability
+### 9.4 Offline Capability
 
 ```typescript
 // ai/offline-mode.ts
@@ -1785,7 +1894,7 @@ export async function chatWithAI(messages: ChatMessage[]): Promise<ChatMessage> 
 }
 ```
 
-### 8.5 Token Management
+### 9.5 Token Management
 
 LLM context windows have limits. We need to:
 
@@ -1820,7 +1929,7 @@ export function allocateTokenBudget(
 }
 ```
 
-### 8.6 Error Handling
+### 9.6 Error Handling
 
 The AI should gracefully handle errors:
 
@@ -1863,7 +1972,7 @@ function suggestFix(error: ValidationError): string {
 }
 ```
 
-### 8.7 User Preferences
+### 9.7 User Preferences
 
 Users should be able to customize AI behavior:
 
@@ -1889,9 +1998,9 @@ export interface AIPreferences {
 
 ---
 
-## 9. Testing Strategy
+## 10. Testing Strategy
 
-### 9.1 Unit Tests
+### 10.1 Unit Tests
 
 Test each action/tool in isolation:
 
@@ -1916,7 +2025,7 @@ describe('createAccount tool', () => {
 });
 ```
 
-### 9.2 Integration Tests
+### 10.2 Integration Tests
 
 Test conversation flows:
 
@@ -1949,7 +2058,7 @@ describe('AI scenario creation', () => {
 });
 ```
 
-### 9.3 E2E Tests
+### 10.3 E2E Tests
 
 Test end-to-end user experiences with Playwright:
 
@@ -1975,7 +2084,7 @@ test('user can ask about retirement readiness', async ({ page }) => {
 
 ---
 
-## 10. Success Metrics
+## 11. Success Metrics
 
 | Metric | Target | How to Measure |
 |--------|--------|---------------|
@@ -1988,7 +2097,7 @@ test('user can ask about retirement readiness', async ({ page }) => {
 
 ---
 
-## 11. Open Questions
+## 12. Open Questions
 
 - [ ] Which LLM provider to use as default? (OpenAI GPT-4o vs Anthropic Claude 3.5 Sonnet vs local models)
 - [ ] How to handle rate limits with client-side API keys?
@@ -2000,7 +2109,7 @@ test('user can ask about retirement readiness', async ({ page }) => {
 
 ---
 
-## 12. Next Steps
+## 13. Next Steps
 
 1. Review and refine this planning document
 2. Create detailed user stories for Phase 1

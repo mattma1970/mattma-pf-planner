@@ -150,7 +150,35 @@ ScenarioSchema = {
 
 ---
 
-## Phase 6: Polish & Advanced Features
+## Phase 6: AI Assistant
+
+**Goal:** Natural language interface for scenario creation, analysis, and financial planning guidance
+
+> **Full specification:** See [pf-assistant.md](./pf-assistant.md) for detailed architecture, implementation phases, and technical design.
+
+| Feature | Description |
+|---------|-------------|
+| Hono server | Lightweight backend for LLM API calls (required for AI mode) |
+| Chat UI | Conversational interface with tool call visualization |
+| Account management | Create/update/delete accounts via natural language |
+| Scenario creation | "What if there's a market downturn in 2030?" |
+| Forecast analysis | "When can I retire with $80K/year?" |
+| Context awareness | AI understands current financial state |
+
+**Architecture highlights:**
+- **Two modes:** Local-only (no AI, no server) and AI mode (requires Hono server)
+- **Hono framework:** Portable — runs on Node.js locally, deploys to Cloudflare Workers for scale
+- **Vercel AI SDK:** Handles LLM streaming and tool calling
+- **API keys server-side:** More secure than client storage
+
+**Sub-phases (see [pf-assistant.md](./pf-assistant.md#8-implementation-phases) for details):**
+- Phase 6a: Foundation — Hono server, chat UI, account tools
+- Phase 6b: Scenarios & Assumptions — Scenario creation via chat
+- Phase 6c: Analysis & Insights — Retirement readiness, recommendations
+
+---
+
+## Phase 7: Polish & Advanced Features
 
 | Feature | Description |
 |---------|-------------|
@@ -159,7 +187,7 @@ ScenarioSchema = {
 | What-if calculator | Quick adjustments without full scenario |
 | Mobile-responsive | Tablet support |
 | Audit trail | Track changes to inputs over time |
-| Cloud sync | Persist data to remote storage |
+| Cloud sync | Persist data to remote storage (Supabase) |
 
 ---
 
@@ -172,7 +200,7 @@ ScenarioSchema = {
 | 3 | Rule Engine | Configurable tax and super rules |
 | 4 | Scenarios | Create, compare, and analyze alternative futures |
 | 5 | Monte Carlo | Probabilistic forecasting with confidence bands |
-| 6 | Polish | Goal setting, exports, cloud sync, mobile support |
-| Future | AI Chat | Conversational scenario creation and insights |
+| 6 | AI Assistant | Natural language chat interface with Hono backend |
+| 7 | Polish | Goal setting, exports, cloud sync, mobile support |
 
 > **Note:** Multi-person/household support was removed from the roadmap. Multiple people can be effectively modeled using separate accounts with appropriate naming conventions.
