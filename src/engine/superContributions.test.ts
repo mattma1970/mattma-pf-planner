@@ -28,6 +28,15 @@ const testSettings: SuperSettings = {
   div293Rate: 0.15,
   employerSgRate: 0.115,
   autoCreateEmployerSg: true,
+  minimumDrawdownRates: {
+    under65: 0.04,
+    '65-74': 0.05,
+    '75-79': 0.06,
+    '80-84': 0.07,
+    '85-89': 0.09,
+    '90-94': 0.11,
+    '95plus': 0.14,
+  },
 };
 
 describe('calculateAvailableCarryForward', () => {

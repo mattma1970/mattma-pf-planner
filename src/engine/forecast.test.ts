@@ -37,7 +37,7 @@ describe('calculateForecast', () => {
         growthProfile: { type: 'fixed', rate: 0.03 },
         endCondition: { type: 'year', year: 2027 },
         endBehavior: 'zero',
-      });
+});
 
       const result = calculateForecast({
         accounts: [incomeAccount],
@@ -93,7 +93,7 @@ describe('calculateForecast', () => {
         epochs: defaultEpochs,
         events: [],
         persons: [],
-        settings: testSettings,
+        settings: { ...testSettings, growthCalculationMethod: 'openingBalance' },
         startYear: 2025,
         endYear: 2030,
       });
@@ -270,7 +270,7 @@ describe('calculateForecast', () => {
         epochs: defaultEpochs,
         events: [buyHouseEvent],
         persons: [],
-        settings: testSettings,
+        settings: { ...testSettings, growthCalculationMethod: 'openingBalance' },
         startYear: 2025,
         endYear: 2027,
       });
@@ -322,7 +322,7 @@ describe('calculateForecast', () => {
         epochs: defaultEpochs,
         events: [payDownEvent],
         persons: [],
-        settings: testSettings,
+        settings: { ...testSettings, growthCalculationMethod: 'openingBalance' },
         startYear: 2025,
         endYear: 2025,
       });
@@ -591,7 +591,7 @@ describe('calculateForecast', () => {
         autoTopup: {
           enabled: true,
           threshold: 0,
-          fromAccountId: 'pension-1111-1111-1111-111111111111',
+          fromAccountIds: ['pension-1111-1111-1111-111111111111'],
         },
       });
 
@@ -643,7 +643,7 @@ describe('calculateForecast', () => {
         autoTopup: {
           enabled: true,
           threshold: 0,
-          fromAccountId: 'pension-1111-1111-1111-111111111111',
+          fromAccountIds: ['pension-1111-1111-1111-111111111111'],
           targetBalance: 20000,
         },
       });
@@ -695,7 +695,7 @@ describe('calculateForecast', () => {
         autoTopup: {
           enabled: true,
           threshold: 0,
-          fromAccountId: 'pension-1111-1111-1111-111111111111',
+          fromAccountIds: ['pension-1111-1111-1111-111111111111'],
         },
       });
 
@@ -1443,7 +1443,7 @@ describe('calculateForecast', () => {
       initialValue: 100000,
       growthProfile: { type: 'fixed', rate: 0.07 },
       assetSubType: 'superannuation',
-      superConfig: { phase: 'accumulation' },
+      superConfig: { },
     });
 
     const bankAccount = createTestAccount({
@@ -1483,7 +1483,7 @@ describe('calculateForecast', () => {
         epochs: defaultEpochs,
         events: [contributionEvent],
         persons: [person],
-        settings: testSettings,
+        settings: { ...testSettings, growthCalculationMethod: 'openingBalance' },
         startYear: 2025,
         endYear: 2025,
       });
@@ -1822,7 +1822,7 @@ describe('calculateForecast', () => {
         epochs: defaultEpochs,
         events: [contributionEvent],
         persons: [person],
-        settings: testSettings,
+        settings: { ...testSettings, growthCalculationMethod: 'openingBalance' },
         startYear: 2025,
         endYear: 2025,
       });
@@ -1852,13 +1852,13 @@ describe('calculateForecast', () => {
         },
       };
 
-      const result = calculateForecast({
+const result = calculateForecast({
         accounts: [superAccount, bankAccount],
         assumptions: defaultAssumptions,
         epochs: defaultEpochs,
         events: [contributionEvent],
         persons: [person],
-        settings: testSettings,
+        settings: { ...testSettings, growthCalculationMethod: 'openingBalance' },
         startYear: 2025,
         endYear: 2025,
       });
@@ -2667,7 +2667,7 @@ describe('calculateForecast', () => {
         name: 'Super',
         type: 'asset',
         assetSubType: 'superannuation',
-        superConfig: { phase: 'accumulation' },
+        superConfig: { },
         initialValue: 100000,
         growthProfile: { type: 'fixed', rate: 0 },
         owner: 'person-1111-1111-1111-111111111111',
@@ -2744,7 +2744,7 @@ describe('calculateForecast', () => {
         name: 'Super',
         type: 'asset',
         assetSubType: 'superannuation',
-        superConfig: { phase: 'accumulation' },
+        superConfig: { },
         initialValue: 0,
         growthProfile: { type: 'fixed', rate: 0 },
         owner: 'person-1111-1111-1111-111111111111',
@@ -2820,7 +2820,7 @@ describe('calculateForecast', () => {
         name: 'Super',
         type: 'asset',
         assetSubType: 'superannuation',
-        superConfig: { phase: 'accumulation' },
+        superConfig: { },
         initialValue: 0, // Start at 0 so we can verify exact contribution
         growthProfile: { type: 'fixed', rate: 0 },
         owner: 'person-1111-1111-1111-111111111111',
@@ -3290,6 +3290,260 @@ describe('calculateForecast', () => {
       const lossCarryForward2027 = year2027.offBalanceSheet?.find(i => i.type === 'capitalLossCarryForward');
       expect(lossCarryForward2027).toBeDefined();
       expect(lossCarryForward2027!.closing).toBe(20000);
+    });
+
+    it('bank account with zero growth and zero return should not grow', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-3333-3333-3333-333333333333',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 300000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2030,
+      });
+
+      // Check each year - balance should remain 300000
+      for (const year of result.years) {
+        const bankResult = year.accounts.find(a => a.accountId === bankAccount.id);
+        expect(bankResult).toBeDefined();
+        expect(bankResult!.endValue).toBe(300000);
+        expect(bankResult!.growth).toBe(0);
+      }
+    });
+
+    it('bank account with average balance method and zero growth should not grow', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-4444-4444-4444-444444444444',
+        name: 'Bank Account Average',
+        type: 'asset',
+        initialValue: 300000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        returnBalanceMethod: 'average',
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: { ...testSettings, growthCalculationMethod: 'averageBalance' },
+        startYear: 2025,
+        endYear: 2030,
+      });
+
+      for (const year of result.years) {
+        const bankResult = year.accounts.find(a => a.accountId === bankAccount.id);
+        expect(bankResult).toBeDefined();
+        expect(bankResult!.endValue).toBe(300000);
+        expect(bankResult!.growth).toBe(0);
+      }
+    });
+
+    it('bank account with return rate of 0 should not generate income', () => {
+      const incomeAccount = createTestAccount({
+        id: 'income-4444-4444-4444-444444444444',
+        name: 'Test Income',
+        type: 'income',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: 'bank-5555-5555-5555-555555555555',
+      });
+
+      const bankAccount = createTestAccount({
+        id: 'bank-5555-5555-5555-555555555555',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 300000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        returnRate: 0,
+        incomeTargetAccountId: 'income-4444-4444-4444-444444444444',
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, incomeAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2030,
+      });
+
+      for (const year of result.years) {
+        const bankResult = year.accounts.find(a => a.accountId === bankAccount.id);
+        expect(bankResult).toBeDefined();
+        // With returnRate = 0, no income should be generated
+        expect(bankResult!.endValue).toBe(300000);
+      }
+    });
+
+    it('applies minimum drawdown for allocated pension at age under 65 (4%)', () => {
+      const person: Person = {
+        id: 'person-6666-6666-6666-666666666666',
+        name: 'Test Person',
+        birthYear: 2000, // Age 25 in 2025
+      };
+
+      const pensionAccount = createTestAccount({
+        id: 'pension-6666-6666-6666-666666666666',
+        name: 'Allocated Pension',
+        type: 'asset',
+        assetSubType: 'allocatedPension',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        owner: person.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [pensionAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const pensionResult = year2025.accounts.find(a => a.accountId === pensionAccount.id)!;
+      
+      // Minimum drawdown for age under 65 = 4% of 500000 = 20000
+      // Since there are no other withdrawals, the minimum drawdown should be applied
+      expect(pensionResult.withdrawals).toBe(20000);
+      expect(pensionResult.endValue).toBe(480000);
+    });
+
+    it('applies minimum drawdown for allocated pension at age 70 (5%)', () => {
+      const person: Person = {
+        id: 'person-7777-7777-7777-777777777777',
+        name: 'Test Person',
+        birthYear: 1955, // Age 70 in 2025
+      };
+
+      const pensionAccount = createTestAccount({
+        id: 'pension-7777-7777-7777-777777777777',
+        name: 'Allocated Pension',
+        type: 'asset',
+        assetSubType: 'allocatedPension',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        owner: person.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [pensionAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const pensionResult = year2025.accounts.find(a => a.accountId === pensionAccount.id)!;
+      
+      // Minimum drawdown for age 65-74 = 5% of 500000 = 25000
+      expect(pensionResult.withdrawals).toBe(25000);
+      expect(pensionResult.endValue).toBe(475000);
+    });
+
+    it('does not apply minimum drawdown when withdrawals already exceed minimum', () => {
+      const person: Person = {
+        id: 'person-8888-8888-8888-888888888888',
+        name: 'Test Person',
+        birthYear: 1955, // Age 70 in 2025
+      };
+
+      const pensionAccount = createTestAccount({
+        id: 'pension-8888-8888-8888-888888888888',
+        name: 'Allocated Pension',
+        type: 'asset',
+        assetSubType: 'allocatedPension',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        owner: person.id,
+      });
+
+      const expenseAccount = createTestAccount({
+        id: 'expense-8888-8888-8888-888888888888',
+        name: 'Living Expenses',
+        type: 'expense',
+        initialValue: 60000, // 60k withdrawal > 25k minimum
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: 'pension-8888-8888-8888-888888888888',
+      });
+
+      const result = calculateForecast({
+        accounts: [pensionAccount, expenseAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const pensionResult = year2025.accounts.find(a => a.accountId === pensionAccount.id)!;
+      
+      // Withdrawal is 60000, which exceeds minimum of 25000, so no additional drawdown
+      expect(pensionResult.withdrawals).toBe(60000);
+      expect(pensionResult.endValue).toBe(440000);
+    });
+
+    it('self-targeting returns appear in contributions total', () => {
+      // Asset that generates returns to itself should show those returns in contributions
+      // Note: self-targeting requires returnRate (not growthRate) + incomeTargetAccountId pointing to self
+      const assetAccount = createTestAccount({
+        id: 'asset-self-9999-9999-9999-999999999999',
+        name: 'Self-Targeting Asset',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 }, // No capital growth
+        returnRate: 0.10, // 10% return (income generated)
+        incomeTargetAccountId: 'asset-self-9999-9999-9999-999999999999', // Target = self
+      });
+
+      const result = calculateForecast({
+        accounts: [assetAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const assetResult = year2025.accounts.find(a => a.accountId === assetAccount.id)!;
+      
+      // With average balance method (default), return should be ~10% of average = ~10% of 105000 = 10500
+      // Contributions should include the self-targeting return
+      expect(assetResult.contributions).toBeGreaterThan(0);
+      expect(assetResult.contributions).toBe(assetResult.endValue - 100000 + assetResult.withdrawals);
+      
+      // Verify cashflow detail exists
+      const cashflowDetails = assetResult.cashflowDetails ?? [];
+      const returnDetail = cashflowDetails.find(d => d.type === 'contribution' && d.description.includes('Return'));
+      expect(returnDetail).toBeDefined();
+      expect(returnDetail!.amount).toBe(assetResult.contributions);
     });
   });
 

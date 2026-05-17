@@ -50,7 +50,7 @@ export const SpecialConfigSchema = z.discriminatedUnion('kind', [
 ]);
 export type SpecialConfig = z.infer<typeof SpecialConfigSchema>;
 
-export const AssetSubTypeSchema = z.enum(['generic', 'superannuation']);
+export const AssetSubTypeSchema = z.enum(['generic', 'superannuation', 'allocatedPension']);
 export type AssetSubType = z.infer<typeof AssetSubTypeSchema>;
 
 export const IncomeSubTypeSchema = z.enum(['salary', 'business', 'investment', 'other']);
@@ -60,7 +60,6 @@ export const SuperPhaseSchema = z.enum(['accumulation', 'pension']);
 export type SuperPhase = z.infer<typeof SuperPhaseSchema>;
 
 export const SuperAccountConfigSchema = z.object({
-  phase: SuperPhaseSchema,
   preservationYear: z.number().int().optional(), // Year when preservation age is reached
 });
 export type SuperAccountConfig = z.infer<typeof SuperAccountConfigSchema>;
@@ -108,7 +107,8 @@ export type LiquidityType = z.infer<typeof LiquidityTypeSchema>;
 export const AutoTopupSchema = z.object({
   enabled: z.boolean().default(false),
   threshold: z.number().default(0),
-  fromAccountId: z.string().uuid(),
+  // Multiple source accounts - drawn from in order until exhausted, then moves to next
+  fromAccountIds: z.array(z.string().uuid()).min(1),
   targetBalance: z.number().optional(),
 });
 export type AutoTopup = z.infer<typeof AutoTopupSchema>;
@@ -138,6 +138,8 @@ export const AccountSchema = z.object({
   growthProfile: GrowthProfileSchema,
   returnRate: z.number().optional(),
   frankingPercentage: z.number().optional(), // Percentage of return that is franked (0-1, e.g., 1.0 = fully franked)
+  returnBalanceMethod: z.enum(['opening', 'closing', 'average']).optional(), // Balance method for return calculation
+  returnTaxTreatment: z.enum(['asIncome', 'taxFree']).optional(), // Tax treatment for returns (for pension accounts)
   incomeTargetAccountId: z.string().uuid().optional(),
   startCondition: AccountConditionSchema.optional(),
   endCondition: AccountConditionSchema.optional(),
@@ -184,6 +186,7 @@ export const AccountSchema = z.object({
   
   // Liability-specific fields
   interestRate: z.number().optional(), // Annual interest rate as decimal (0.065 for 6.5%)
+  interestBalanceMethod: z.enum(['opening', 'closing', 'average']).optional(), // Balance method for interest calculation
   paymentType: LiabilityPaymentTypeSchema.optional(),
   annualPayment: z.number().optional(), // Fixed annual payment amount
   calculatePayment: z.boolean().optional(), // Auto-calculate payment to pay off by end date

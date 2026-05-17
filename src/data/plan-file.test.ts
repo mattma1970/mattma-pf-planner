@@ -22,6 +22,15 @@ describe('parsePlanFile', () => {
         contributionsTaxRate: 0.15,
         div293Threshold: 250000,
         div293Rate: 0.15,
+        minimumDrawdownRates: {
+          under65: 0.04,
+          '65-74': 0.05,
+          '75-79': 0.06,
+          '80-84': 0.07,
+          '85-89': 0.09,
+          '90-94': 0.11,
+          '95plus': 0.14,
+        },
       },
       companyTaxRate: 0.30,
     },
@@ -98,7 +107,7 @@ describe('parsePlanFile', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.settings.eventHighlightColor).toBe('#bfdbfe');
-      expect(result.data.settings.growthCalculationMethod).toBe('openingBalance');
+      expect(result.data.settings.growthCalculationMethod).toBe('averageBalance');
     }
   });
 });

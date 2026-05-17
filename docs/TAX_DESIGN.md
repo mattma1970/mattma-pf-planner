@@ -532,7 +532,62 @@ Acquisition Year: ____
 
 ---
 
-## 10. Open Questions
+## 10. Superannuation Pension Minimum Drawdown
+
+Australian law requires account-based pension (allocated pension) holders to withdraw a minimum amount each financial year. This is calculated based on the person's age and the pension account balance.
+
+### 10.1 Minimum Drawdown Rates
+
+The minimum drawdown percentage is determined by the account holder's age at 1 July each year (or at commencement if started mid-year):
+
+| Age | Minimum % of Account Balance |
+|-----|------------------------------|
+| Under 65 | 4% |
+| 65-74 | 5% |
+| 75-79 | 6% |
+| 80-84 | 7% |
+| 85-89 | 9% |
+| 90-94 | 11% |
+| 95+ | 14% |
+
+**Calculation:** `Minimum Drawdown = Account Balance on 1 July × Age-based %`
+
+### 10.2 Implementation in Forecast Engine
+
+The forecast engine handles minimum drawdown as follows:
+
+1. **Identify allocated pension accounts** - Accounts with `assetSubType: 'allocatedPension'`
+2. **Calculate owner's age** - Based on person's birth year and the current forecast year
+3. **Determine minimum rate** - Look up the appropriate percentage based on age
+4. **Calculate minimum amount** - `pensionBalance × rate`
+5. **Ensure withdrawal occurs** - If actual withdrawals are less than minimum, the shortfall is added as a mandatory withdrawal
+6. **Track compliance** - Flag if minimum is not met for validation/warning purposes
+
+### 10.3 Interaction with Auto-Topup
+
+The minimum drawdown is processed in Phase 8 (before auto-topup) in the following order:
+
+```
+8a. Minimum Pension Drawdown  → Forces withdrawal from allocated pension accounts
+8b. Auto-Topup                → Can draw from any account including pension if needed
+```
+
+This ensures:
+- Pension accounts first satisfy their minimum drawdown requirement
+- Auto-topup can then draw from pension accounts if needed (to top up other accounts)
+- The order prevents circular logic
+
+### 10.4 Transition to Retirement (TTR) Pensions
+
+TTR pensions have both a minimum and maximum drawdown:
+- **Minimum:** Same as standard (4%-14% based on age)
+- **Maximum:** 10% of account balance
+
+For TTR pensions, the system should validate that withdrawals are within the min-max range.
+
+---
+
+## 11. Open Questions
 
 - [ ] Should we track cost base per lot for shares (FIFO/LIFO)?
 - [ ] How to handle principal residence CGT exemption?

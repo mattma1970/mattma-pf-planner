@@ -71,6 +71,8 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
   const [isTaxExpanded, setIsTaxExpanded] = useState(false);
   const [isCashflowExpanded, setIsCashflowExpanded] = useState(false);
   const [isTaxAccountsExpanded, setIsTaxAccountsExpanded] = useState(false);
+  const [isContributionsExpanded, setIsContributionsExpanded] = useState<Record<string, boolean>>({});
+  const [isWithdrawalsExpanded, setIsWithdrawalsExpanded] = useState<Record<string, boolean>>({});
 
   const sortedEpochs = useMemo(() => [...epochs].sort((a, b) => a.order - b.order), [epochs]);
 
@@ -792,7 +794,17 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                 
                 {/* Contributions (inflows) / Borrowing (for liabilities) */}
                 <tr key={`cf-${account.id}-contrib`} className="bg-white">
-                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
+                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6 flex items-center gap-1">
+                    {isLiability ? (
+                      <>{isLiability ? '+ New Borrowing' : '+ Contributions'}</>
+                    ) : (
+                      <button 
+                        onClick={() => setIsContributionsExpanded(prev => ({ ...prev, [account.id]: !prev[account.id] }))}
+                        className="hover:text-cyan-600"
+                      >
+                        <span className="text-gray-400 text-xs">{isContributionsExpanded[account.id] ? '▼' : '▶'}</span>
+                      </button>
+                    )}
                     {isLiability ? '+ New Borrowing' : '+ Contributions'}
                   </td>
                   {years.map((yearData) => {
@@ -806,9 +818,45 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                   })}
                 </tr>
                 
+                {/* Contributions breakdown (expandable) */}
+                {!isLiability && isContributionsExpanded[account.id] && (() => {
+                  const allDescriptions = new Set<string>();
+                  years.forEach((yearData) => {
+                    const result = yearData.accounts.find(a => a.accountId === account.id);
+                    result?.cashflowDetails?.filter(d => d.type === 'contribution').forEach(d => allDescriptions.add(d.description));
+                  });
+                  
+                  return Array.from(allDescriptions).map((description) => (
+                    <tr key={`cf-${account.id}-contrib-${description}`} className="bg-gray-50/50">
+                      <td className="px-3 py-0.5 text-left text-gray-500 text-xs sticky left-0 bg-gray-50/50 border-r border-gray-200 min-w-48 pl-10">
+                        {description}
+                      </td>
+                      {years.map((yearData) => {
+                        const result = yearData.accounts.find(a => a.accountId === account.id);
+                        const detail = result?.cashflowDetails?.find(d => d.description === description && d.type === 'contribution');
+                        return (
+                          <td key={yearData.year} className="px-3 py-0.5 text-right text-xs text-gray-500">
+                            {detail ? formatCurrency(detail.amount) : '-'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ));
+                })()}
+                
                 {/* Withdrawals (outflows) / Principal Payments (for liabilities) */}
                 <tr key={`cf-${account.id}-withdraw`} className="bg-white">
-                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
+                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6 flex items-center gap-1">
+                    {isLiability ? (
+                      <>{isLiability ? '− Principal Paid' : '− Withdrawals (Total)'}</>
+                    ) : (
+                      <button 
+                        onClick={() => setIsWithdrawalsExpanded(prev => ({ ...prev, [account.id]: !prev[account.id] }))}
+                        className="hover:text-cyan-600"
+                      >
+                        <span className="text-gray-400 text-xs">{isWithdrawalsExpanded[account.id] ? '▼' : '▶'}</span>
+                      </button>
+                    )}
                     {isLiability ? '− Principal Paid' : '− Withdrawals (Total)'}
                   </td>
                   {years.map((yearData) => {
@@ -822,8 +870,8 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                   })}
                 </tr>
                 
-                {/* Withdrawal breakdown (for non-liabilities with cashflow details) */}
-                {!isLiability && (() => {
+                {/* Withdrawal breakdown (expandable, for non-liabilities) */}
+                {!isLiability && isWithdrawalsExpanded[account.id] && (() => {
                   // Get all unique withdrawal descriptions across all years
                   const allDescriptions = new Set<string>();
                   years.forEach((yearData) => {

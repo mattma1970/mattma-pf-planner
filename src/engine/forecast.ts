@@ -41,6 +41,7 @@ import {
   applyDeferredLedger,
   checkConservation,
 } from './ledger';
+import { defaultSettings } from '../schemas/settings';
 
 interface PendingCgtEvent {
   accountId: string;
@@ -927,7 +928,24 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           const epochReturnOverride = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'returnRate');
           const effectiveReturnRate = epochReturnOverride ?? account.returnRate;
           if (effectiveReturnRate) {
-            const cashReturn = balanceForGrowth * effectiveReturnRate;
+            // Determine balance for return calculation based on returnBalanceMethod (default: average)
+            const balanceMethod = account.returnBalanceMethod ?? 'average';
+            let balanceForReturn: number;
+            
+            switch (balanceMethod) {
+              case 'opening':
+                balanceForReturn = openingValue;
+                break;
+              case 'closing':
+                balanceForReturn = endValue; // Closing before adjustments
+                break;
+              case 'average':
+              default:
+                balanceForReturn = (openingValue + endValue) / 2;
+                break;
+            }
+            
+            const cashReturn = balanceForReturn * effectiveReturnRate;
             
             // Calculate franking credits if franking percentage is set
             const frankingPercentage = account.frankingPercentage ?? 0;
@@ -1093,6 +1111,37 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     // Apply deferred Phase-5 ledger entries (strict: reports error if account missing)
     applyDeferredLedger(deferredLedgerEntries, yearLedgerEntries, accountResults, accountValues, ledgerError);
 
+    // Tax handling for synthetic return entries
+    // Returns are deposited to the income target account via ledger entries (kind: 'synthetic').
+    // For tax purposes, returns should be attributed to the SOURCE asset account.
+    for (const entry of deferredLedgerEntries) {
+      if (entry.kind !== 'synthetic') continue;
+      if (!entry.sourceAccountId) continue;
+
+      const sourceAccount = accounts.find(a => a.id === entry.sourceAccountId);
+      if (!sourceAccount) continue;
+
+      const isTaxable = (sourceAccount.returnTaxTreatment ?? 'asIncome') !== 'taxFree';
+      if (!isTaxable) continue;
+
+      if (sourceAccount.owner) {
+        incomeByPerson.set(sourceAccount.owner, (incomeByPerson.get(sourceAccount.owner) ?? 0) + entry.amount);
+      }
+      totalIncome += entry.amount;
+
+      const fundingAccountId = sourceAccount.taxFundedFromAccountId ?? settings.defaultTaxFundingAccountId;
+      if (fundingAccountId) {
+        incomeByAccount.push({
+          accountId: sourceAccount.id,
+          accountName: sourceAccount.name,
+          amount: entry.amount,
+          fundedFromAccountId: fundingAccountId,
+          personId: sourceAccount.owner,
+          personName: sourceAccount.owner ? persons.find(p => p.id === sourceAccount.owner)?.name : undefined,
+        });
+      }
+    }
+
     // ===========================================
     // PHASE 6: Liability interest and payment processing
     // ===========================================
@@ -1134,14 +1183,31 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       
       const interestRate = account.interestRate ?? 0;
       
+      // Determine balance for interest calculation based on interestBalanceMethod (default: average)
+      const balanceMethod = account.interestBalanceMethod ?? 'average';
+      let balanceForInterest: number;
+      
+      switch (balanceMethod) {
+        case 'opening':
+          balanceForInterest = result.startValue;
+          break;
+        case 'closing':
+          balanceForInterest = result.endValue;
+          break;
+        case 'average':
+        default:
+          balanceForInterest = (result.startValue + result.endValue) / 2;
+          break;
+      }
+      
       // Calculate effective balance for interest (considering offset account)
       // Only positive offset balances reduce the effective loan balance
-      let effectiveBalance = result.endValue;
+      let effectiveBalance = balanceForInterest;
       if (account.offsetAccountId) {
         const offsetResult = accountResults.get(account.offsetAccountId);
         if (offsetResult) {
           const offsetBalance = Math.max(0, offsetResult.endValue); // Ignore negative balances
-          effectiveBalance = Math.max(0, result.endValue - offsetBalance);
+          effectiveBalance = Math.max(0, balanceForInterest - offsetBalance);
         }
       }
       
@@ -1745,8 +1811,80 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     const netPosition = totalIncome - totalExpenses - taxPayable;
 
     // ===========================================
+    // PHASE 8a: Minimum pension drawdown (allocated pensions)
+    // Australian law requires minimum withdrawal based on age
+    // ===========================================
+    
+    const superSettings = settings.super ?? defaultSettings.super;
+    const drawdownRates = superSettings.minimumDrawdownRates ?? {
+      under65: 0.04,
+      '65-74': 0.05,
+      '75-79': 0.06,
+      '80-84': 0.07,
+      '85-89': 0.09,
+      '90-94': 0.11,
+      '95plus': 0.14,
+    };
+    
+    for (const account of accounts) {
+      if (account.type !== 'asset' || account.assetSubType !== 'allocatedPension') continue;
+      
+      const result = accountResults.get(account.id);
+      if (!result || result.endValue <= 0) continue;
+      
+      // Get the owner's age at 1 July of this year
+      const owner = persons.find(p => p.id === account.owner);
+      if (!owner) continue;
+      
+      const age = year - owner.birthYear;
+      
+      // Determine minimum drawdown rate based on age
+      let minRate: number;
+      if (age < 65) {
+        minRate = drawdownRates.under65;
+      } else if (age < 75) {
+        minRate = drawdownRates['65-74'];
+      } else if (age < 80) {
+        minRate = drawdownRates['75-79'];
+      } else if (age < 85) {
+        minRate = drawdownRates['80-84'];
+      } else if (age < 90) {
+        minRate = drawdownRates['85-89'];
+      } else if (age < 95) {
+        minRate = drawdownRates['90-94'];
+      } else {
+        minRate = drawdownRates['95plus'];
+      }
+      
+      const minimumDrawdown = result.endValue * minRate;
+      
+      // Check if actual withdrawals meet minimum
+      const actualWithdrawals = result.withdrawals;
+      
+      if (actualWithdrawals < minimumDrawdown) {
+        const shortfall = minimumDrawdown - actualWithdrawals;
+        
+        // Cap shortfall at available balance to prevent negative balance
+        const actualShortfall = Math.min(shortfall, result.endValue);
+        
+        // Force additional withdrawal to meet minimum (capped to prevent negative)
+        result.withdrawals += actualShortfall;
+        result.endValue -= actualShortfall;
+        accountValues.set(account.id, result.endValue);
+        
+        if (!result.cashflowDetails) result.cashflowDetails = [];
+        result.cashflowDetails.push({
+          description: `Minimum pension drawdown (age ${age}, ${minRate * 100}%)`,
+          amount: shortfall,
+          type: 'withdrawal',
+        });
+      }
+    }
+
+    // ===========================================
     // PHASE 8: Auto-topup processing
     // Runs AFTER liability payments and tax so balance reflects all withdrawals
+    // Supports multiple source accounts with sequential drawdown
     // ===========================================
     
     for (const account of accounts) {
@@ -1759,48 +1897,80 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       
       // Check if balance is below threshold
       if (result.endValue < threshold) {
-        const sourceResult = accountResults.get(account.autoTopup.fromAccountId);
-        if (!sourceResult) continue;
-        
-        // Calculate topup amount
         const targetBalance = account.autoTopup.targetBalance ?? threshold;
-        const topupAmount = targetBalance - result.endValue;
+        let topupAmount = targetBalance - result.endValue;
         
-        if (topupAmount > 0) {
-          const sourceAccount = accounts.find(a => a.id === account.autoTopup!.fromAccountId);
-          // Auto-topup is an internal transfer between two model accounts — both sides explicit
-          emitLedgerEntry(
-            {
-              accountId: account.autoTopup!.fromAccountId,
-              amount: topupAmount,
-              delta: 'debit',
-              kind: 'internalTransfer',
-              label: `Auto top-up to: ${account.name}`,
-              sourceAccountId: account.id,
-              sourceAccountName: account.name,
-            },
-            yearLedgerEntries,
-            accountResults,
-            accountValues,
-            ledgerError,
-          );
-          emitLedgerEntry(
-            {
-              accountId: account.id,
-              amount: topupAmount,
-              delta: 'credit',
-              kind: 'internalTransfer',
-              label: `Auto top-up from: ${sourceAccount?.name ?? 'Unknown'}`,
-              sourceAccountId: account.autoTopup!.fromAccountId,
-              sourceAccountName: sourceAccount?.name,
-            },
-            yearLedgerEntries,
-            accountResults,
-            accountValues,
-            ledgerError,
-          );
-          result.autoTopupApplied = true;
-          sourceResult.autoTopupApplied = true;
+        if (topupAmount <= 0) continue;
+
+        // Get source accounts in priority order
+        const sourceAccountIds = account.autoTopup.fromAccountIds ?? [];
+        let remainingTopup = topupAmount;
+
+        // Track contributions from multiple sources for the cashflow detail
+        const topupContributions: { accountId: string; accountName: string; amount: number }[] = [];
+
+        // Draw from each source account sequentially
+        for (const sourceAccountId of sourceAccountIds) {
+          if (remainingTopup <= 0) break;
+
+          const sourceResult = accountResults.get(sourceAccountId);
+          const sourceAccount = accounts.find(a => a.id === sourceAccountId);
+          if (!sourceResult || !sourceAccount) continue;
+
+          const availableBalance = sourceResult.endValue;
+          let drawAmount: number;
+
+          if (sourceAccountIds.length === 1) {
+            drawAmount = remainingTopup;
+          } else {
+            drawAmount = Math.min(remainingTopup, availableBalance);
+          }
+
+          if (drawAmount > 0) {
+            topupContributions.push({
+              accountId: sourceAccountId,
+              accountName: sourceAccount.name,
+              amount: drawAmount,
+            });
+
+            emitLedgerEntry(
+              {
+                accountId: sourceAccountId,
+                amount: drawAmount,
+                delta: 'debit',
+                kind: 'internalTransfer',
+                label: `Auto top-up to: ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+              yearLedgerEntries,
+              accountResults,
+              accountValues,
+              ledgerError,
+            );
+
+            emitLedgerEntry(
+              {
+                accountId: account.id,
+                amount: drawAmount,
+                delta: 'credit',
+                kind: 'internalTransfer',
+                label: `Auto top-up from: ${sourceAccount.name}`,
+                sourceAccountId: sourceAccountId,
+                sourceAccountName: sourceAccount.name,
+              },
+              yearLedgerEntries,
+              accountResults,
+              accountValues,
+              ledgerError,
+            );
+
+            result.autoTopupApplied = true;
+            sourceResult.autoTopupApplied = true;
+
+            remainingTopup -= drawAmount;
+          }
+        }
         }
       }
     }

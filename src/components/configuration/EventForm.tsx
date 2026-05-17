@@ -65,7 +65,7 @@ export function EventForm({ event, accounts, persons, forecast, settings, onSubm
   };
   
   const assetAccounts = accounts.filter((a) => a.type === 'asset');
-  const superAccounts = accounts.filter((a) => a.type === 'asset' && a.assetSubType === 'superannuation');
+  const superAccounts = accounts.filter((a) => a.type === 'asset' && (a.assetSubType === 'superannuation' || a.assetSubType === 'allocatedPension'));
 
   const calculateTransferAllAmount = (eventYear: number, accountId: string): number => {
     if (!forecast || !accountId) return 0;

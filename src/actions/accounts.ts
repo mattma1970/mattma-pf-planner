@@ -120,8 +120,8 @@ export async function findAccountReferences(accountId: string): Promise<AccountR
       }
     }
 
-    // Check auto-topup reference
-    if (account.autoTopup?.fromAccountId === accountId) {
+    // Check auto-topup references (supports multiple source accounts)
+    if (account.autoTopup?.fromAccountIds?.includes(accountId)) {
       references.push({
         type: 'account',
         id: account.id,

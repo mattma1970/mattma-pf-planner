@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { Button, Input, Select } from '../ui';
-import type { Account, AccountInput, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType, AssetSubType, SuperPhase, IncomeSubType, IncomeAsSuperContributionConfig } from '../../schemas/account';
+import type { Account, AccountInput, GrowthProfile, AccountCondition, EndBehavior, LiquidityType, IncomeTaxTreatment, GrowthOperation, LiabilityPaymentType, AssetSubType, IncomeSubType, IncomeAsSuperContributionConfig } from '../../schemas/account';
 import type { Person } from '../../schemas/person';
 import type { Settings } from '../../schemas/settings';
 import type { AccountReference } from '../../actions/accounts';
@@ -96,6 +96,8 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
   const [depositsToAccountId, setDepositsToAccountId] = useState(account?.depositsToAccountId ?? (account ? '' : defaultBankAccount));
   const [fundedByAccountId, setFundedByAccountId] = useState(account?.fundedByAccountId ?? (account ? '' : defaultBankAccount));
   const [returnRate, setReturnRate] = useState(account?.returnRate ? (account.returnRate * 100).toString() : '');
+  const [returnBalanceMethod, setReturnBalanceMethod] = useState<'opening' | 'closing' | 'average'>(account?.returnBalanceMethod ?? 'average');
+  const [returnTaxTreatment, setReturnTaxTreatment] = useState<'asIncome' | 'taxFree'>(account?.returnTaxTreatment ?? 'asIncome');
   const [frankingPercentage, setFrankingPercentage] = useState(account?.frankingPercentage !== undefined ? (account.frankingPercentage * 100).toString() : '');
   const [incomeTargetAccountId, setIncomeTargetAccountId] = useState(account?.incomeTargetAccountId ?? (account ? '' : defaultBankAccount));
   const [liquidityType, setLiquidityType] = useState<LiquidityType | ''>(account?.liquidityType ?? '');
@@ -112,11 +114,12 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
   // Auto-topup settings for assets
   const [autoTopupEnabled, setAutoTopupEnabled] = useState(account?.autoTopup?.enabled ?? false);
   const [autoTopupThreshold, setAutoTopupThreshold] = useState(account?.autoTopup?.threshold?.toString() ?? '0');
-  const [autoTopupFromAccountId, setAutoTopupFromAccountId] = useState(account?.autoTopup?.fromAccountId ?? '');
+  const [autoTopupFromAccountIds, setAutoTopupFromAccountIds] = useState<string[]>(account?.autoTopup?.fromAccountIds ?? []);
   const [autoTopupTargetBalance, setAutoTopupTargetBalance] = useState(account?.autoTopup?.targetBalance?.toString() ?? '');
 
   // Liability-specific settings
   const [interestRate, setInterestRate] = useState(account?.interestRate ? (account.interestRate * 100).toString() : '');
+  const [interestBalanceMethod, setInterestBalanceMethod] = useState<'opening' | 'closing' | 'average'>(account?.interestBalanceMethod ?? 'average');
   const [paymentType, setPaymentType] = useState<LiabilityPaymentType>(account?.paymentType ?? 'principalAndInterest');
   const [annualPayment, setAnnualPayment] = useState(account?.annualPayment?.toString() ?? '');
   const [calculatePayment, setCalculatePayment] = useState(account?.calculatePayment ?? false);
@@ -125,7 +128,6 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
 
   // Superannuation-specific settings
   const [assetSubType, setAssetSubType] = useState<AssetSubType>(account?.assetSubType ?? 'generic');
-  const [superPhase, setSuperPhase] = useState<SuperPhase>(account?.superConfig?.phase ?? 'accumulation');
   const [preservationYear, setPreservationYear] = useState(account?.superConfig?.preservationYear?.toString() ?? '');
 
   // Expense-specific settings
@@ -152,8 +154,8 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
 
   const otherAccounts = accounts.filter((a) => a.id !== account?.id);
   const assetAccounts = accounts.filter((a) => a.type === 'asset' && a.id !== account?.id);
-  const incomeAccounts = accounts.filter((a) => a.type === 'income' && a.id !== account?.id);
-  const superAccounts = accounts.filter((a) => a.type === 'asset' && a.assetSubType === 'superannuation' && a.id !== account?.id);
+  const assetAccountsAll = accounts.filter((a) => a.type === 'asset');
+  const superAccounts = accounts.filter((a) => a.type === 'asset' && (a.assetSubType === 'superannuation' || a.assetSubType === 'allocatedPension') && a.id !== account?.id);
   
   // For derived income, also include any income account (for flexibility)
   const derivableIncomeAccounts = accounts.filter((a) => a.type === 'income' && a.id !== account?.id && !a.basedOnAccountId);
@@ -228,7 +230,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
     const growthProfile: GrowthProfile = (() => {
       const rate = (parseFloat(growthRate) || 0) / 100;
       const change = (parseFloat(changePerYear) || 0) / 100;
-      const cpiVal = (parseFloat(cpiValue) || 0) / 100;
+      const cpiVal = parseFloat(cpiValue) || 0; // Don't divide by 100 - this is a multiplier (e.g., 0.5 for 50% of CPI), not a percentage
       switch (growthType) {
         case 'fixed':
           return { type: 'fixed' as const, rate };
@@ -276,6 +278,8 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       returnRate: type === 'asset' && returnRate ? parseFloat(returnRate) / 100 : undefined,
       frankingPercentage: type === 'asset' && frankingPercentage ? parseFloat(frankingPercentage) / 100 : undefined,
       incomeTargetAccountId: type === 'asset' && incomeTargetAccountId ? incomeTargetAccountId : undefined,
+      returnBalanceMethod: type === 'asset' && returnRate ? returnBalanceMethod : undefined,
+      returnTaxTreatment: type === 'asset' && returnRate ? returnTaxTreatment : undefined,
       liquidityType: type === 'asset' && liquidityType ? liquidityType : undefined,
       startCondition,
       endCondition,
@@ -294,15 +298,16 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       eligibleForCgtDiscount: type === 'asset' && isSellBehavior ? eligibleForCgtDiscount : undefined,
       
       // Auto-topup settings (for assets)
-      autoTopup: type === 'asset' && autoTopupEnabled && autoTopupFromAccountId ? {
+      autoTopup: type === 'asset' && autoTopupEnabled && autoTopupFromAccountIds.length > 0 ? {
         enabled: true,
         threshold: parseFloat(autoTopupThreshold) || 0,
-        fromAccountId: autoTopupFromAccountId,
+        fromAccountIds: autoTopupFromAccountIds,
         targetBalance: autoTopupTargetBalance ? parseFloat(autoTopupTargetBalance) : undefined,
       } : undefined,
       
       // Liability-specific settings
       interestRate: type === 'liability' && interestRate ? parseFloat(interestRate) / 100 : undefined,
+      interestBalanceMethod: type === 'liability' && interestRate ? interestBalanceMethod : undefined,
       paymentType: type === 'liability' ? paymentType : undefined,
       annualPayment: type === 'liability' && !calculatePayment && annualPayment ? parseFloat(annualPayment) : undefined,
       calculatePayment: type === 'liability' ? calculatePayment : undefined,
@@ -311,8 +316,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       
       // Superannuation settings (for assets)
       assetSubType: type === 'asset' ? assetSubType : undefined,
-      superConfig: type === 'asset' && assetSubType === 'superannuation' ? {
-        phase: superPhase,
+      superConfig: type === 'asset' && (assetSubType === 'superannuation' || assetSubType === 'allocatedPension') ? {
         preservationYear: preservationYear ? parseInt(preservationYear) : undefined,
       } : undefined,
       
@@ -469,24 +473,16 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
           onChange={(e) => setAssetSubType(e.target.value as AssetSubType)}
         >
           <option value="generic">Generic Asset</option>
-          <option value="superannuation">Superannuation</option>
+          <option value="superannuation">Superannuation (Accumulation)</option>
+          <option value="allocatedPension">Allocated Pension</option>
         </Select>
       )}
 
-      {type === 'asset' && assetSubType === 'superannuation' && (
+      {type === 'asset' && (assetSubType === 'superannuation' || assetSubType === 'allocatedPension') && (
         <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-          <h4 className="text-sm font-medium text-purple-800 mb-3">Superannuation Settings</h4>
+          <h4 className="text-sm font-medium text-purple-800 mb-3">{assetSubType === 'allocatedPension' ? 'Allocated Pension Settings' : 'Superannuation Settings'}</h4>
           
-          <Select
-            label="Phase"
-            value={superPhase}
-            onChange={(e) => setSuperPhase(e.target.value as SuperPhase)}
-          >
-            <option value="accumulation">Accumulation</option>
-            <option value="pension">Pension</option>
-          </Select>
-          
-          <div className="mt-4">
+          <div>
             <Input
               label="Year of Preservation Age"
               type="number"
@@ -499,16 +495,11 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
             </p>
           </div>
           
-          <div className="mt-3 text-xs text-purple-600 space-y-1">
-            <p><strong>Accumulation:</strong> 15% tax on earnings, cannot withdraw until preservation age</p>
-            <p><strong>Pension:</strong> 0% tax on earnings, regular pension payments</p>
-            {superPhase === 'accumulation' && (
-              <p className="mt-2">
-                💡 Tip: Set an end condition at retirement age with "Transfer" behavior to 
-                automatically move to a pension-phase super account.
-              </p>
-            )}
-          </div>
+          {assetSubType === 'superannuation' && (
+            <div className="mt-3 text-xs text-purple-600 space-y-1">
+              <p>💡 Tip: Use an end condition at retirement age to trigger a transfer to an Allocated Pension account.</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -810,7 +801,8 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       {type === 'asset' && (
         <div className="border-t pt-4">
           <h3 className="text-sm font-medium text-gray-700 mb-2">Income Generation</h3>
-          <div className="grid grid-cols-3 gap-4">
+          
+          <div className="grid grid-cols-2 gap-4 mb-4">
             <Input
               label="Return Rate (%)"
               type="number"
@@ -819,6 +811,28 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
               onChange={(e) => setReturnRate(e.target.value)}
               placeholder="e.g. 5 for 5%"
             />
+            <Select
+              label="Return Balance Method"
+              hint="Balance used for return calculation"
+              value={returnBalanceMethod}
+              onChange={(e) => setReturnBalanceMethod(e.target.value as 'opening' | 'closing' | 'average')}
+            >
+              <option value="opening">Opening</option>
+              <option value="average">Average (recommended)</option>
+              <option value="closing">Closing</option>
+            </Select>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <Select
+              label="Return Tax Treatment"
+              hint="How returns are taxed"
+              value={returnTaxTreatment}
+              onChange={(e) => setReturnTaxTreatment(e.target.value as 'asIncome' | 'taxFree')}
+            >
+              <option value="asIncome">As Income (taxed)</option>
+              <option value="taxFree">Tax Free</option>
+            </Select>
             <Input
               label="Franking (%)"
               type="number"
@@ -829,21 +843,28 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
               onChange={(e) => setFrankingPercentage(e.target.value)}
               placeholder="e.g. 100 for fully franked"
             />
+          </div>
+          
+          <div className="mb-4">
             <Select
-              label={returnRate ? "Generates Income To *" : "Generates Income To"}
+              label="Deposit to Account"
+              hint="Account to receive investment returns"
               value={incomeTargetAccountId}
               onChange={(e) => setIncomeTargetAccountId(e.target.value)}
             >
               <option value="">{returnRate ? 'Select account...' : 'None'}</option>
-              {incomeAccounts.map((a) => (
+              {assetAccountsAll.map((a) => (
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
             </Select>
           </div>
-          <p className="text-xs text-gray-500 mt-2">
-            {returnRate 
-              ? 'Required when return rate is set. Franking credits gross up the income and provide a tax offset.'
-              : 'Select an income account to receive investment returns. Set franking % for dividend imputation credits.'}
+          
+          <p className="text-xs text-gray-500">
+            {returnTaxTreatment === 'taxFree' 
+              ? 'Returns are not taxed (e.g., pension phase). Tax treatment set to Tax Free.'
+              : returnRate 
+                ? 'Returns are added to income and taxed at your marginal rate. Franking credits gross up the income and provide a tax offset.'
+                : 'Select an income account to receive investment returns.'}
           </p>
         </div>
       )}
@@ -861,6 +882,19 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
               onChange={(e) => setInterestRate(e.target.value)}
               placeholder="e.g. 6.5 for 6.5%"
             />
+            <Select
+              label="Interest Balance Method"
+              hint="Balance used for interest calculation"
+              value={interestBalanceMethod}
+              onChange={(e) => setInterestBalanceMethod(e.target.value as 'opening' | 'closing' | 'average')}
+            >
+              <option value="opening">Opening</option>
+              <option value="average">Average (recommended)</option>
+              <option value="closing">Closing</option>
+            </Select>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4 mb-4">
             <Select
               label="Payment Type"
               value={paymentType}
@@ -1083,16 +1117,51 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
             
             {autoTopupEnabled && (
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-4">
-                <Select
-                  label="Top Up From"
-                  value={autoTopupFromAccountId}
-                  onChange={(e) => setAutoTopupFromAccountId(e.target.value)}
-                >
-                  <option value="" disabled>Select source account...</option>
-                  {assetAccounts.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
-                </Select>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Top Up From (in priority order)
+                  </label>
+                  <p className="text-xs text-gray-500 mb-2">
+                    Add accounts in order of priority. Funds are drawn from the first account until exhausted, then the next.
+                  </p>
+                  <div className="space-y-2">
+                    {autoTopupFromAccountIds.map((accountId, index) => {
+                      return (
+                        <div key={index} className="flex items-center gap-2">
+                          <span className="text-xs text-gray-400 w-6">{index + 1}.</span>
+                          <Select
+                            value={accountId}
+                            onChange={(e) => {
+                              const newIds = [...autoTopupFromAccountIds];
+                              newIds[index] = e.target.value;
+                              setAutoTopupFromAccountIds(newIds);
+                            }}
+                            className="flex-1"
+                          >
+                            <option value="" disabled>Select account...</option>
+                            {accounts.filter(a => a.type === 'asset').map((a) => (
+                              <option key={a.id} value={a.id}>{a.name}</option>
+                            ))}
+                          </Select>
+                          <button
+                            type="button"
+                            onClick={() => setAutoTopupFromAccountIds(autoTopupFromAccountIds.filter((_, i) => i !== index))}
+                            className="text-red-500 hover:text-red-700 text-sm"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => setAutoTopupFromAccountIds([...autoTopupFromAccountIds, ''])}
+                      className="text-sm text-blue-600 hover:text-blue-700"
+                    >
+                      + Add source account
+                    </button>
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <Input
                     label="Threshold ($)"
@@ -1110,7 +1179,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
                   />
                 </div>
                 <p className="text-xs text-blue-600">
-                  When balance falls below threshold, transfer from source account. 
+                  When balance falls below threshold, transfer from source accounts in priority order.
                   If target balance is set, top up to that amount; otherwise top up to threshold.
                 </p>
               </div>

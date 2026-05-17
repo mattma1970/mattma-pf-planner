@@ -69,10 +69,19 @@ Rather than hardcoding specific income sources, assets, or liabilities, the syst
 - Name (user-defined)
 - Type (income/expense/asset/liability)
 - Owner (which person, or joint)
-- Growth/interest rate (can reference assumptions)
+- Growth/interest rate + balance method (can reference assumptions)
 - Tax treatment (how it interacts with tax rules)
 - Epoch behavior (carries forward, liquidates, transfers, sells with CGT)
 - Auto top-up (for assets: automatically transfer from another account when balance falls below threshold)
+
+**Asset Sub-Types (for Super/Retirement accounts):**
+| Sub-Type | Description |
+|----------|-------------|
+| `generic` | Standard asset (shares, property, cash) |
+| `superannuation` | Superannuation in accumulation phase |
+| `allocatedPension` | Account-based pension (pension phase) |
+
+*Note: Allocated pension accounts are subject to Australian minimum drawdown requirements based on the account owner's age. See [TAX_DESIGN.md](TAX_DESIGN.md) for details.*
 
 **Expense-Specific Features:**
 
