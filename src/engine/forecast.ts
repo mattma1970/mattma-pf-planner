@@ -149,7 +149,6 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
   const priorYearInflows: Map<string, number> = new Map();
 
   accounts.forEach((account) => {
-    accountValues.set(account.id, account.initialValue);
     // Initialize prior year inflows to initialValue for income/expense accounts
     if (account.type === 'income' || account.type === 'expense') {
       priorYearInflows.set(account.id, account.initialValue);
@@ -212,11 +211,16 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     const openingValues = new Map<string, number>();
     for (const account of accounts) {
       const isFirstActiveYear = !accountStartYears.has(account.id) && isAccountActive(account, year, persons);
-      const opening = isFirstActiveYear
-        ? account.initialValue
-        : (account.type === 'income' || account.type === 'expense')
-          ? 0
-          : (accountValues.get(account.id) ?? account.initialValue);
+      let opening: number;
+      if (isFirstActiveYear) {
+        opening = account.initialValue;
+      } else if (account.type === 'income' || account.type === 'expense') {
+        opening = 0;
+      } else if (accountStartYears.has(account.id)) {
+        opening = accountValues.get(account.id) ?? 0;
+      } else {
+        opening = 0;
+      }
       openingValues.set(account.id, opening);
     }
     
@@ -273,7 +277,9 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         ? account.initialValue
         : (account.type === 'income' || account.type === 'expense')
           ? 0
-          : (accountValues.get(account.id) ?? account.initialValue);
+          : accountStartYears.has(account.id)
+            ? (accountValues.get(account.id) ?? 0)
+            : 0;
 
       // Check if this account ends this year with a transfer/sell
       if (isActive) {
@@ -392,6 +398,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     
     // Track super contribution flows separately from transfers (for proper reporting as contributions)
     const superContributionFlows = new Map<string, number>(); // accountId -> contribution amount
+    const superContributionDetails: { targetAccountId: string; description: string; amount: number; sourceAccountId?: string }[] = [];
     
     // Pre-calculate blocked/excess contributions per person
     // This allows us to adjust flows when contributions can't be made
@@ -554,6 +561,12 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           event.targetAccountId,
           (superContributionFlows.get(event.targetAccountId) ?? 0) + effectiveAmount
         );
+        superContributionDetails.push({
+          targetAccountId: event.targetAccountId,
+          description: event.description,
+          amount: effectiveAmount,
+          sourceAccountId: event.sourceAccountId,
+        });
         
         // If there's a source account (salary sacrifice, personal contribution), deduct as transfer
         // Only deduct the effective amount (not the blocked portion)
@@ -612,7 +625,9 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
 
       const openingValue = isFirstActiveYear
         ? account.initialValue
-        : (accountValues.get(account.id) ?? account.initialValue);
+        : accountStartYears.has(account.id)
+          ? (accountValues.get(account.id) ?? 0)
+          : 0;
 
       // Get flow amounts
       const lifecycleChange = lifecycleFlows.get(account.id) ?? 0;
@@ -625,6 +640,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       let withdrawals = 0;
       let transfers = 0;
       let endValue = openingValue;
+      const details: { description: string; amount: number; type: 'contribution' | 'withdrawal'; sourceAccountId?: string }[] = [];
       
       // Track lifecycle transfers: outflows as transfers, inflows as contributions
       const lifecycleContribution = Math.max(0, lifecycleChange);
@@ -632,6 +648,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         transfers = lifecycleChange; // Outflow (source account)
       } else if (lifecycleChange > 0) {
         contributions = lifecycleChange; // Inflow (destination account) - for reporting
+        details.push({ description: 'Lifecycle transfer in', amount: lifecycleChange, type: 'contribution' });
       }
       
       // Track user transfers as transfers (both in and out)
@@ -639,6 +656,13 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       
       // Track super contributions as contributions (not transfers)
       contributions += superContributionChange;
+      if (superContributionChange !== 0) {
+        for (const sc of superContributionDetails) {
+          if (sc.targetAccountId === account.id) {
+            details.push({ description: sc.description, amount: sc.amount, type: 'contribution', sourceAccountId: sc.sourceAccountId });
+          }
+        }
+      }
 
       if (isActive && !isLifecycleEnding) {
         // Calculate balance for growth based on settings.growthCalculationMethod
@@ -808,8 +832,10 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           if (event.affectedAccountId === account.id) {
             if (event.type === 'income' || event.type === 'assetChange') {
               eventContributions += event.amount;
+              details.push({ description: event.description, amount: event.amount, type: 'contribution', sourceAccountId: event.sourceAccountId });
             } else if (event.type === 'expense' || event.type === 'liabilityChange') {
               eventWithdrawals += event.amount;
+              details.push({ description: event.description, amount: event.amount, type: 'withdrawal', sourceAccountId: event.sourceAccountId });
             }
           }
         }
@@ -1094,6 +1120,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         withdrawals,
         transfers,
         endValue,
+        cashflowDetails: details,
       });
     }
 
@@ -1112,8 +1139,6 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     applyDeferredLedger(deferredLedgerEntries, yearLedgerEntries, accountResults, accountValues, ledgerError);
 
     // Tax handling for synthetic return entries
-    // Returns are deposited to the income target account via ledger entries (kind: 'synthetic').
-    // For tax purposes, returns should be attributed to the SOURCE asset account.
     for (const entry of deferredLedgerEntries) {
       if (entry.kind !== 'synthetic') continue;
       if (!entry.sourceAccountId) continue;
@@ -1172,7 +1197,12 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           ledgerError,
         );
         // Zero out the liability
-        result.withdrawals = payoffInfo.amount;
+        if (!result.cashflowDetails) result.cashflowDetails = [];
+        result.cashflowDetails.push({
+          description: `Liability payoff: ${payoffInfo.liabilityName}`,
+          amount: payoffInfo.amount,
+          type: 'withdrawal',
+        });
         result.endValue = 0;
         accountValues.set(account.id, 0);
         continue; // Skip normal liability processing
@@ -1272,7 +1302,14 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       // Update liability balance
       // Interest is tracked for display but the net balance change depends on payment type
       result.growth = interestAmount; // Interest accrued (shown for transparency)
-      result.withdrawals = principalReduction; // Principal reduction
+      if (principalReduction > 0) {
+        if (!result.cashflowDetails) result.cashflowDetails = [];
+        result.cashflowDetails.push({
+          description: `Principal reduction: ${account.name}`,
+          amount: principalReduction,
+          type: 'withdrawal',
+        });
+      }
       
       // For interest-only: balance stays same (interest is paid off each year)
       // For P&I: balance = balance + interest - payment = balance - principal reduction
@@ -1858,8 +1895,10 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       
       const minimumDrawdown = result.endValue * minRate;
       
-      // Check if actual withdrawals meet minimum
-      const actualWithdrawals = result.withdrawals;
+      // Check if actual withdrawals meet minimum (from cashflowDetails - source of truth)
+      const actualWithdrawals = result.cashflowDetails
+        ?.filter(d => d.type === 'withdrawal')
+        .reduce((sum, d) => sum + d.amount, 0) ?? 0;
       
       if (actualWithdrawals < minimumDrawdown) {
         const shortfall = minimumDrawdown - actualWithdrawals;
@@ -1868,16 +1907,33 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         const actualShortfall = Math.min(shortfall, result.endValue);
         
         // Force additional withdrawal to meet minimum (capped to prevent negative)
-        result.withdrawals += actualShortfall;
         result.endValue -= actualShortfall;
         accountValues.set(account.id, result.endValue);
         
         if (!result.cashflowDetails) result.cashflowDetails = [];
         result.cashflowDetails.push({
           description: `Minimum pension drawdown (age ${age}, ${minRate * 100}%)`,
-          amount: shortfall,
+          amount: actualShortfall,
           type: 'withdrawal',
         });
+
+        // Deposit to income target account if configured
+        if (account.incomeTargetAccountId) {
+          const targetResult = accountResults.get(account.incomeTargetAccountId);
+          if (targetResult) {
+            targetResult.endValue += actualShortfall;
+            accountValues.set(account.incomeTargetAccountId, targetResult.endValue);
+
+            if (!targetResult.cashflowDetails) targetResult.cashflowDetails = [];
+            targetResult.cashflowDetails.push({
+              description: `Minimum pension drawdown from: ${account.name}`,
+              amount: actualShortfall,
+              type: 'contribution',
+              sourceAccountId: account.id,
+              sourceAccountName: account.name,
+            });
+          }
+        }
       }
     }
 
@@ -1972,6 +2028,18 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           }
         }
         }
+      }
+    }
+
+    // Final pass: recompute contributions/withdrawals from cashflowDetails (source of truth)
+    for (const result of accountResults.values()) {
+      if (result.cashflowDetails) {
+        result.contributions = result.cashflowDetails
+          .filter(d => d.type === 'contribution')
+          .reduce((s, d) => s + d.amount, 0);
+        result.withdrawals = result.cashflowDetails
+          .filter(d => d.type === 'withdrawal')
+          .reduce((s, d) => s + d.amount, 0);
       }
     }
 

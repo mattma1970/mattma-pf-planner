@@ -3507,6 +3507,68 @@ const result = calculateForecast({
       expect(pensionResult.endValue).toBe(440000);
     });
 
+    it('deposits minimum drawdown to the pension incomeTargetAccountId', () => {
+      const person: Person = {
+        id: 'person-9999-9999-9999-999999999999',
+        name: 'Test Person',
+        birthYear: 1955, // Age 70 in 2025
+      };
+
+      const bankAccount = createTestAccount({
+        id: 'bank-9999-9999-9999-999999999999',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 50000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const pensionAccount = createTestAccount({
+        id: 'pension-9999-9999-9999-999999999999',
+        name: 'Allocated Pension',
+        type: 'asset',
+        assetSubType: 'allocatedPension',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        owner: person.id,
+        incomeTargetAccountId: bankAccount.id, // Drawdown deposits here
+      });
+
+      const result = calculateForecast({
+        accounts: [pensionAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const pensionResult = year2025.accounts.find(a => a.accountId === pensionAccount.id)!;
+      const bankResult = year2025.accounts.find(a => a.accountId === bankAccount.id)!;
+
+      // Minimum drawdown for age 65-74 = 5% of 500000 = 25000
+      expect(pensionResult.withdrawals).toBe(25000);
+      expect(pensionResult.endValue).toBe(475000);
+
+      // The drawdown should be deposited to the bank account
+      expect(bankResult.contributions).toBe(25000);
+      expect(bankResult.endValue).toBe(75000); // 50000 + 25000
+
+      // Cashflow details should exist on both sides
+      expect(pensionResult.cashflowDetails).toBeDefined();
+      expect(pensionResult.cashflowDetails!.length).toBe(1);
+      expect(pensionResult.cashflowDetails![0].type).toBe('withdrawal');
+      expect(pensionResult.cashflowDetails![0].amount).toBe(25000);
+
+      expect(bankResult.cashflowDetails).toBeDefined();
+      expect(bankResult.cashflowDetails!.length).toBe(1);
+      expect(bankResult.cashflowDetails![0].type).toBe('contribution');
+      expect(bankResult.cashflowDetails![0].amount).toBe(25000);
+      expect(bankResult.cashflowDetails![0].sourceAccountId).toBe(pensionAccount.id);
+    });
+
     it('self-targeting returns appear in contributions total', () => {
       // Asset that generates returns to itself should show those returns in contributions
       // Note: self-targeting requires returnRate (not growthRate) + incomeTargetAccountId pointing to self
