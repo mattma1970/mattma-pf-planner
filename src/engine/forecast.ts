@@ -35,6 +35,12 @@ import {
   type ContributionProcessingResult,
 } from './superContributions';
 import { calculateDiv293 } from './taxRules';
+import {
+  type LedgerEntry,
+  emitLedgerEntry,
+  applyDeferredLedger,
+  checkConservation,
+} from './ledger';
 
 interface PendingCgtEvent {
   accountId: string;
@@ -589,7 +595,14 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     // PHASE 4 & 5: Process each account - apply growth and derived flows
     // ===========================================
     
-    const derivedFlows: { accountId: string; amount: number; type: 'contribution' | 'withdrawal'; description: string; sourceAccountId?: string; sourceAccountName?: string }[] = [];
+    // All ledger entries applied this year (for conservation check)
+    const yearLedgerEntries: LedgerEntry[] = [];
+    // Phase-5 entries deferred until after the account processing loop
+    const deferredLedgerEntries: LedgerEntry[] = [];
+
+    const ledgerError = (msg: string): void => {
+      yearWarnings.push({ type: 'ledgerError', severity: 'error', message: msg });
+    };
 
     for (const account of accounts) {
       const isActive = isAccountActive(account, year, persons);
@@ -848,22 +861,67 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             // the target super account has already been processed in this loop.
             // Instead, we use derivedFlows which are applied after all accounts are processed.
             
-            // Add derived flow for the target super account
-            derivedFlows.push({
+            // Add deferred ledger entry for the target super account
+            // Employer SG and similar contributions are external money entering the model
+            deferredLedgerEntries.push({
               accountId: config.targetSuperAccountId,
               amount: totalIncomeValue,
-              type: 'contribution',
-              description: `${config.source === 'employerSG' ? 'Employer SG' : config.source}: ${account.name}`,
+              delta: 'credit',
+              kind: 'externalIn',
+              label: `${config.source === 'employerSG' ? 'Employer SG' : config.source}: ${account.name}`,
               sourceAccountId: account.id,
               sourceAccountName: account.name,
             });
-          } else if (account.depositsToAccountId && totalIncomeValue > 0) {
-            // Standard income account - deposit to target account
-            derivedFlows.push({ accountId: account.depositsToAccountId, amount: totalIncomeValue, type: 'contribution', description: `Income: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
+          } else if (totalIncomeValue > 0) {
+            if (account.drawnFromAccountId && account.depositsToAccountId) {
+              // Pension/AP drawdown: internal transfer from the source asset to the cash account.
+              // Both sides emitted so the transfer balance check can verify they match.
+              deferredLedgerEntries.push({
+                accountId: account.drawnFromAccountId,
+                amount: totalIncomeValue,
+                delta: 'debit',
+                kind: 'internalTransfer',
+                label: `Drawdown source: ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              });
+              deferredLedgerEntries.push({
+                accountId: account.depositsToAccountId,
+                amount: totalIncomeValue,
+                delta: 'credit',
+                kind: 'internalTransfer',
+                label: `Drawdown: ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              });
+            } else if (account.depositsToAccountId) {
+              // Standard income (salary, rent, etc.) — money entering from the real world
+              deferredLedgerEntries.push({
+                accountId: account.depositsToAccountId,
+                amount: totalIncomeValue,
+                delta: 'credit',
+                kind: 'externalIn',
+                label: `Income: ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              });
+            }
+            // Note: if depositsToAccountId IS set but the account doesn't exist, the ledger
+            // apply step above will emit a ledgerError warning. If no depositsToAccountId is
+            // set at all (e.g. income not yet wired up), no warning is needed — the income
+            // simply isn't routed anywhere, which may be intentional during plan construction.
           }
         }
         if (account.type === 'expense' && account.fundedByAccountId) {
-          derivedFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal', description: `Expense: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
+          deferredLedgerEntries.push({
+            accountId: account.fundedByAccountId,
+            amount: projectedValue,
+            delta: 'debit',
+            kind: 'externalOut',
+            label: `Expense: ${account.name}`,
+            sourceAccountId: account.id,
+            sourceAccountName: account.name,
+          });
         }
         if (account.type === 'asset' && account.incomeTargetAccountId && balanceForGrowth > 0) {
           const epochReturnOverride = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'returnRate');
@@ -894,8 +952,17 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
               frankingCreditsByPerson.set(ownerId, (frankingCreditsByPerson.get(ownerId) ?? 0) + frankingCredits);
             }
             
-            // Deposit the grossed up amount to the income account (this becomes taxable income)
-            derivedFlows.push({ accountId: account.incomeTargetAccountId, amount: grossedUpReturn, type: 'contribution', description: `Return: ${account.name}${frankingCredits > 0 ? ' (grossed up)' : ''}`, sourceAccountId: account.id, sourceAccountName: account.name });
+            // Deposit the grossed up amount to the income account (this becomes taxable income).
+            // The return is new wealth created by the market, classified as synthetic.
+            deferredLedgerEntries.push({
+              accountId: account.incomeTargetAccountId,
+              amount: grossedUpReturn,
+              delta: 'credit',
+              kind: 'synthetic',
+              label: `Return: ${account.name}${frankingCredits > 0 ? ' (grossed up)' : ''}`,
+              sourceAccountId: account.id,
+              sourceAccountName: account.name,
+            });
           }
         }
         if (account.type === 'asset' && account.fundedByAccountId) {
@@ -909,7 +976,16 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             fundingAmount += account.initialValue;
           }
           if (fundingAmount > 0) {
-            derivedFlows.push({ accountId: account.fundedByAccountId, amount: fundingAmount, type: 'withdrawal', description: `Fund asset: ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
+            // Bank funds the asset purchase — internal transfer (asset credit is implicit in account processing)
+            deferredLedgerEntries.push({
+              accountId: account.fundedByAccountId,
+              amount: fundingAmount,
+              delta: 'debit',
+              kind: 'internalTransfer',
+              label: `Fund asset: ${account.name}`,
+              sourceAccountId: account.id,
+              sourceAccountName: account.name,
+            });
           }
         }
       } else if (isLifecycleEnding) {
@@ -933,10 +1009,26 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         }
 
         if (account.type === 'income' && account.depositsToAccountId && account.endBehavior === 'hold') {
-          derivedFlows.push({ accountId: account.depositsToAccountId, amount: projectedValue, type: 'contribution', description: `Income (held): ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
+          deferredLedgerEntries.push({
+            accountId: account.depositsToAccountId,
+            amount: projectedValue,
+            delta: 'credit',
+            kind: 'externalIn',
+            label: `Income (held): ${account.name}`,
+            sourceAccountId: account.id,
+            sourceAccountName: account.name,
+          });
         }
         if (account.type === 'expense' && account.fundedByAccountId && account.endBehavior === 'hold') {
-          derivedFlows.push({ accountId: account.fundedByAccountId, amount: projectedValue, type: 'withdrawal', description: `Expense (held): ${account.name}`, sourceAccountId: account.id, sourceAccountName: account.name });
+          deferredLedgerEntries.push({
+            accountId: account.fundedByAccountId,
+            amount: projectedValue,
+            delta: 'debit',
+            kind: 'externalOut',
+            label: `Expense (held): ${account.name}`,
+            sourceAccountId: account.id,
+            sourceAccountName: account.name,
+          });
         }
       }
 
@@ -998,32 +1090,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       }
     }
 
-    // Apply derived flows
-    for (const flow of derivedFlows) {
-      const result = accountResults.get(flow.accountId);
-      if (result) {
-        if (flow.type === 'contribution') {
-          result.contributions += flow.amount;
-          result.endValue += flow.amount;
-        } else {
-          result.withdrawals += flow.amount;
-          result.endValue -= flow.amount;
-        }
-        accountValues.set(flow.accountId, result.endValue);
-        
-        // Track cashflow detail
-        if (!result.cashflowDetails) {
-          result.cashflowDetails = [];
-        }
-        result.cashflowDetails.push({
-          description: flow.description,
-          amount: flow.amount,
-          type: flow.type,
-          sourceAccountId: flow.sourceAccountId,
-          sourceAccountName: flow.sourceAccountName,
-        });
-      }
-    }
+    // Apply deferred Phase-5 ledger entries (strict: reports error if account missing)
+    applyDeferredLedger(deferredLedgerEntries, yearLedgerEntries, accountResults, accountValues, ledgerError);
 
     // ===========================================
     // PHASE 6: Liability interest and payment processing
@@ -1038,25 +1106,22 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       // Check if this liability is being paid off via asset sale
       const payoffInfo = liabilityPayoffs.get(account.id);
       if (payoffInfo) {
-        // Liability is being paid off from asset sale
-        // Create a withdrawal from the funding account to pay off the liability
-        const fundingResult = accountResults.get(payoffInfo.fundedByAccountId);
-        if (fundingResult) {
-          fundingResult.withdrawals += payoffInfo.amount;
-          fundingResult.endValue -= payoffInfo.amount;
-          accountValues.set(payoffInfo.fundedByAccountId, fundingResult.endValue);
-          
-          // Track cashflow detail on funding account
-          if (!fundingResult.cashflowDetails) fundingResult.cashflowDetails = [];
-          fundingResult.cashflowDetails.push({
-            description: `Payoff: ${payoffInfo.liabilityName}`,
+        // Liability paid off from asset sale proceeds — internal transfer (NW-neutral)
+        emitLedgerEntry(
+          {
+            accountId: payoffInfo.fundedByAccountId,
             amount: payoffInfo.amount,
-            type: 'withdrawal',
+            delta: 'debit',
+            kind: 'internalTransfer',
+            label: `Payoff: ${payoffInfo.liabilityName}`,
             sourceAccountId: account.id,
             sourceAccountName: payoffInfo.liabilityName,
-          });
-        }
-        
+          },
+          yearLedgerEntries,
+          accountResults,
+          accountValues,
+          ledgerError,
+        );
         // Zero out the liability
         result.withdrawals = payoffInfo.amount;
         result.endValue = 0;
@@ -1155,23 +1220,25 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       accountValues.set(account.id, result.endValue);
       
       // Withdraw payment from funding account
+      // Interest portion leaves the model (externalOut); principal portion is internal.
+      // We use externalOut for the full payment — the principal reduction is visible
+      // via the liability's own endValue decrease (captured in conservation as NW change).
       if (account.fundedByAccountId && paymentAmount > 0) {
-        const fundingResult = accountResults.get(account.fundedByAccountId);
-        if (fundingResult) {
-          fundingResult.withdrawals += paymentAmount;
-          fundingResult.endValue -= paymentAmount;
-          accountValues.set(account.fundedByAccountId, fundingResult.endValue);
-          
-          // Track cashflow detail
-          if (!fundingResult.cashflowDetails) fundingResult.cashflowDetails = [];
-          fundingResult.cashflowDetails.push({
-            description: `Liability: ${account.name}`,
+        emitLedgerEntry(
+          {
+            accountId: account.fundedByAccountId,
             amount: paymentAmount,
-            type: 'withdrawal',
+            delta: 'debit',
+            kind: 'externalOut',
+            label: `Liability payment: ${account.name}`,
             sourceAccountId: account.id,
             sourceAccountName: account.name,
-          });
-        }
+          },
+          yearLedgerEntries,
+          accountResults,
+          accountValues,
+          ledgerError,
+        );
       }
     }
 
@@ -1421,16 +1488,19 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         
         // Deduct 15% contributions tax from super account (for concessional contributions within cap)
         if (result.contributionsTax > 0) {
-          superResult.withdrawals += result.contributionsTax;
-          superResult.endValue -= result.contributionsTax;
-          accountValues.set(superAccountId, superResult.endValue);
-          
-          if (!superResult.cashflowDetails) superResult.cashflowDetails = [];
-          superResult.cashflowDetails.push({
-            description: `Super contributions tax (15%)`,
-            amount: result.contributionsTax,
-            type: 'withdrawal',
-          });
+          emitLedgerEntry(
+            {
+              accountId: superAccountId,
+              amount: result.contributionsTax,
+              delta: 'debit',
+              kind: 'externalOut',
+              label: 'Super contributions tax (15%)',
+            },
+            yearLedgerEntries,
+            accountResults,
+            accountValues,
+            ledgerError,
+          );
           
           // Add tax event for contributions tax
           const contribPerson = persons.find(p => p.id === contribs.personId);
@@ -1542,19 +1612,19 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           const div293FundingAccount = accounts.find(a => a.id === div293FundingAccountId) ?? superAccount;
           
           // Deduct from funding account
-          const fundingResult = accountResults.get(div293FundingAccountId);
-          if (fundingResult) {
-            fundingResult.withdrawals += div293Result.taxAmount;
-            fundingResult.endValue -= div293Result.taxAmount;
-            accountValues.set(div293FundingAccountId, fundingResult.endValue);
-            
-            if (!fundingResult.cashflowDetails) fundingResult.cashflowDetails = [];
-            fundingResult.cashflowDetails.push({
-              description: `Division 293 tax`,
+          emitLedgerEntry(
+            {
+              accountId: div293FundingAccountId,
               amount: div293Result.taxAmount,
-              type: 'withdrawal',
-            });
-          }
+              delta: 'debit',
+              kind: 'externalOut',
+              label: 'Division 293 tax',
+            },
+            yearLedgerEntries,
+            accountResults,
+            accountValues,
+            ledgerError,
+          );
           
           const div293Person = persons.find(p => p.id === contribs.personId);
           taxEvents.push({
@@ -1654,22 +1724,21 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     for (const [fundedFromAccountId, agg] of aggregationMap) {
       const calculatedTax = taxAggregations.find(a => a.fundedFromAccountId === fundedFromAccountId)?.calculatedTax ?? 0;
       
-      // Deduct tax from funding account
+      // Deduct tax from funding account — money leaves model to ATO
       if (fundedFromAccountId !== 'unassigned') {
-        const fundingResult = accountResults.get(fundedFromAccountId);
-        if (fundingResult) {
-          fundingResult.withdrawals += calculatedTax;
-          fundingResult.endValue -= calculatedTax;
-          accountValues.set(fundedFromAccountId, fundingResult.endValue);
-          
-          // Track cashflow detail
-          if (!fundingResult.cashflowDetails) fundingResult.cashflowDetails = [];
-          fundingResult.cashflowDetails.push({
-            description: `Tax payment (${agg.taxSchedule === 'flatRate15' ? '15% flat' : 'marginal rates'})`,
+        emitLedgerEntry(
+          {
+            accountId: fundedFromAccountId,
             amount: calculatedTax,
-            type: 'withdrawal',
-          });
-        }
+            delta: 'debit',
+            kind: 'externalOut',
+            label: `Tax payment (${agg.taxSchedule === 'flatRate15' ? '15% flat' : 'marginal rates'})`,
+          },
+          yearLedgerEntries,
+          accountResults,
+          accountValues,
+          ledgerError,
+        );
       }
     }
 
@@ -1699,34 +1768,39 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         
         if (topupAmount > 0) {
           const sourceAccount = accounts.find(a => a.id === account.autoTopup!.fromAccountId);
-          
-          // Apply topup to target account
-          result.contributions += topupAmount;
-          result.endValue += topupAmount;
+          // Auto-topup is an internal transfer between two model accounts — both sides explicit
+          emitLedgerEntry(
+            {
+              accountId: account.autoTopup!.fromAccountId,
+              amount: topupAmount,
+              delta: 'debit',
+              kind: 'internalTransfer',
+              label: `Auto top-up to: ${account.name}`,
+              sourceAccountId: account.id,
+              sourceAccountName: account.name,
+            },
+            yearLedgerEntries,
+            accountResults,
+            accountValues,
+            ledgerError,
+          );
+          emitLedgerEntry(
+            {
+              accountId: account.id,
+              amount: topupAmount,
+              delta: 'credit',
+              kind: 'internalTransfer',
+              label: `Auto top-up from: ${sourceAccount?.name ?? 'Unknown'}`,
+              sourceAccountId: account.autoTopup!.fromAccountId,
+              sourceAccountName: sourceAccount?.name,
+            },
+            yearLedgerEntries,
+            accountResults,
+            accountValues,
+            ledgerError,
+          );
           result.autoTopupApplied = true;
-          accountValues.set(account.id, result.endValue);
-          if (!result.cashflowDetails) result.cashflowDetails = [];
-          result.cashflowDetails.push({
-            description: `Auto top-up from: ${sourceAccount?.name ?? 'Unknown'}`,
-            amount: topupAmount,
-            type: 'contribution',
-            sourceAccountId: account.autoTopup.fromAccountId,
-            sourceAccountName: sourceAccount?.name,
-          });
-          
-          // Withdraw from source account (allow negative balance)
-          sourceResult.withdrawals += topupAmount;
-          sourceResult.endValue -= topupAmount;
           sourceResult.autoTopupApplied = true;
-          accountValues.set(account.autoTopup.fromAccountId, sourceResult.endValue);
-          if (!sourceResult.cashflowDetails) sourceResult.cashflowDetails = [];
-          sourceResult.cashflowDetails.push({
-            description: `Auto top-up to: ${account.name}`,
-            amount: topupAmount,
-            type: 'withdrawal',
-            sourceAccountId: account.id,
-            sourceAccountName: account.name,
-          });
         }
       }
     }
@@ -1888,6 +1962,17 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         personName: data.personName,
         totalAssessable: data.totalAssessable,
         calculatedTax,
+      });
+    }
+
+    // Conservation check — runs after all phases so all ledger entries are accumulated
+    const conservation = checkConservation(yearLedgerEntries, accountResults, accounts, year);
+    if (!conservation.passed) {
+      yearWarnings.push({
+        type: 'conservationViolation',
+        severity: 'error',
+        message: `Transaction integrity check failed for ${year}`,
+        details: `Transfer imbalance: $${conservation.transferImbalance.toFixed(0)}. Wealth drift: $${conservation.wealthDrift.toFixed(0)}.`,
       });
     }
 
