@@ -238,9 +238,9 @@ These are not resolved yet — record them here until the feature set is settled
 | # | Question | Options | Notes |
 |---|----------|---------|-------|
 | 1 | **Confirmation model** | ✅ Decided: Option B — optimistic writes + turn-level undo snapshot | See full discussion below |
-| 2 | **Person configuration** | Fold into `upsertAccount`? Separate `setPerson` tool? | Birth year, retirement year, preservation age, tax funding account aren't `AccountInput` fields |
-| 3 | **Assumptions tool** | Separate `setAssumptions` tool (tool 7)?<br>Or fold into `manageScenario`? | CPI and growth rate overrides per year range are a common LLM task |
-| 4 | **Context strategy** | Pass full `getState()` in every system message?<br>Pass compact summary? | Affects token cost; full state ~2–5KB per turn |
+| 2 | **Person configuration** | ✅ Decided: separate `setPerson` tool (tool 7) | Birth year, retirement year, preservation age, tax funding account — natural sentences users will say; needs a clean home for multi-person future |
+| 3 | **Assumptions tool** | ✅ Decided: separate `setAssumptions` tool (tool 8); writes to active scenario | CPI and growth rate overrides per year range; activate scenario first, then call `setAssumptions` |
+| 4 | **Context strategy** | ✅ Decided: compact summary prepended to each user message; system prompt static only | See full discussion below |
 | 5 | **Error recovery in skills** | If `upsertAccount` succeeds but `runForecast` returns a conservationViolation, what does the skill do? | Should skills have a retry/undo step, or escalate to user? |
 | 6 | **Batch mutations** | Should `upsertAccount` accept an array, or always one at a time? | One at a time is simpler to debug; array is more efficient for scenario setup |
 
@@ -386,6 +386,53 @@ setAssumptions(params: {
   }>;
 }): { ok: boolean }
 ```
+
+---
+
+## Context Strategy (Decided)
+
+### What goes where
+
+| Location | Content | Changes per turn? | Cached? |
+|---|---|---|---|
+| System prompt | AU rules, tool descriptions, skill recipes, behavioural instructions | Never | ✅ Yes — full cache hit every turn |
+| Prepended to user message | Compact state summary (accounts, persons, warnings) | Yes — regenerated fresh at send time | No — expected to change |
+| Conversation history | Raw turns verbatim (last N) + masked placeholders for older turns | Grows each turn | No |
+
+### Compact state summary format
+
+Injected at the top of each user message, generated from live Zustand state at send time.
+Kept to ~80–120 tokens so it doesn't dominate short conversational turns.
+
+```
+[Persons: Alice (born 1970, retiring 2032, preservation age 60)]
+[Accounts: Salary $120k · Super $380k · Cash $45k · Living Expenses $65k]
+[Active scenario: Base Case | Warnings: none]
+```
+
+### Why system prompt stays static
+
+Prompt caching hashes a prefix. Injecting state into the system prompt means the hash
+changes whenever any account changes — busting the cache on every turn. Keeping the system
+prompt static (rules + instructions only) means it cache-hits on every single turn, giving
+50–90% cost reduction on those tokens. State belongs in the user message turn where it is
+expected to change.
+
+### History masking
+
+Older turns that contain state summaries are masked (the summary line replaced with
+`[state snapshot — superseded]`) rather than accumulated. This prevents the context window
+filling with N stale copies of the account list over a long session. Masking does not affect
+the system prompt cache since the system prompt is never modified.
+
+### Query type mapping
+
+| Query type | Context needed | Tool calls needed |
+|---|---|---|
+| Conversational ("explain CGT") | Compact summary sufficient | None |
+| Admin ("add a salary account") | Compact summary for orientation; `getState()` for IDs before mutating | `getState()` → `upsertAccount()` → `runForecast()` |
+| Specific scenario ("sell house in 2030 not 2040") | Compact summary to confirm correct account; `getState()` for ID | `getState()` → `upsertAccount()` → `runForecast()` |
+| General scenario ("model a market downturn") | Compact summary to ask intelligent follow-up questions; `getState()` when ready to act | Optional web search → `getState()` → `manageScenario()` → `setAssumptions()` → `runForecast()` |
 
 ---
 
