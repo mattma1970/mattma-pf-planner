@@ -242,7 +242,7 @@ These are not resolved yet — record them here until the feature set is settled
 | 3 | **Assumptions tool** | ✅ Decided: separate `setAssumptions` tool (tool 8); writes to active scenario | CPI and growth rate overrides per year range; activate scenario first, then call `setAssumptions` |
 | 4 | **Context strategy** | ✅ Decided: compact summary prepended to each user message; system prompt static only | See full discussion below |
 | 5 | **Error recovery in skills** | ✅ Decided: one auto-fix attempt if cause is unambiguous; escalate to user if auto-fix fails; never auto-undo without user consent | See rationale below |
-| 6 | **Batch mutations** | Should `upsertAccount` accept an array, or always one at a time? | One at a time is simpler to debug; array is more efficient for scenario setup |
+| 6 | **Batch mutations** | ✅ Decided: one at a time — clean error attribution over marginal efficiency gain; optimise later if needed | |
 
 ---
 
