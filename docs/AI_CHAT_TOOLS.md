@@ -1,0 +1,285 @@
+# AI Chat Tool Layer — Design Notes
+
+**Status:** Planning (not implemented)  
+**Last Updated:** 2026-05-31
+
+---
+
+## Goal
+
+Expose every app feature to an LLM so a user can drive the retirement planner entirely
+through a chat interface. The LLM should be able to:
+
+- Read the current financial state and forecast
+- Create, update, and delete accounts / events / assumptions
+- Set up Australian-specific structures (employer SG, pension drawdown, scenarios)
+- Run the forecast and verify its own changes before reporting back to the user
+
+---
+
+## Architecture Decision: Primitives + Skills
+
+Two approaches were considered:
+
+### Option A — Domain-semantic tools (~13 tools)
+
+Each tool encodes Australian-specific logic in its parameter schema:
+`addEmployerSuperContributions`, `configurePensionDrawdown`, `addIncomeSource`, etc.
+
+### Option B — Primitives + Skills (~6 tools) ✅ Chosen
+
+A small set of thin, orthogonal tool calls. Domain knowledge (what fields to set, in what
+order, with what validation) lives in **skill prompts** — not in tool signatures.
+
+**Why Option B:**
+- Tools are stable even as Australian rules change (e.g. SG rate goes from 11.5% → 12%)
+- Domain logic lives in one place (the skill prompt), not spread across tool parameters
+- Edge cases are handled by the LLM improvising on primitives rather than hitting a tool's
+  rigid constraint
+- Fewer tools to implement, test, and maintain
+
+**Tradeoff accepted:** Multi-step use cases require 2–3 LLM round-trips (read → mutate →
+verify) rather than 1. This is acceptable; latency is not a primary concern for a planning
+tool used reflectively.
+
+---
+
+## The 6 Primitive Tools
+
+### 1. `getState`
+
+Read-only snapshot of all app state. Called first in every skill to establish context
+before mutating anything.
+
+```typescript
+getState(): {
+  persons: Array<{
+    id: string;
+    name: string;
+    birthYear: number;
+    retirementYear: number;
+    preservationAge: number;
+    taxFundingAccountId?: string;
+  }>;
+  accounts: Array<{
+    id: string;
+    name: string;
+    type: 'income' | 'expense' | 'asset' | 'liability';
+    currentValue: number;
+    growthProfileSummary: string;  // human-readable, e.g. "fixed 6%"
+    activeYears: string;           // e.g. "2025–2040" or "always"
+  }>;
+  events: Array<{
+    id: string;
+    name: string;
+    year: number;
+    accountId: string;
+    delta: 'credit' | 'debit';
+    amount: number;
+  }>;
+  assumptions: {
+    cpi: number;
+    defaultGrowthRate: number;
+    overrides: AssumptionOverride[];
+  };
+  activeScenarioId: string;
+  warnings: ForecastWarning[];
+}
+```
+
+### 2. `runForecast`
+
+Triggers a forecast recalculation and returns summary output. Read-only — never mutates
+state. Used by skills to verify changes after mutations.
+
+```typescript
+runForecast(params?: { scenarioId?: string }): {
+  years: Array<{
+    year: number;
+    netWorth: number;
+    totalIncome: number;
+    totalExpenses: number;
+    tax: number;
+  }>;
+  depletionYear?: number;   // first year netWorth < 0, if any
+  warnings: ForecastWarning[];
+}
+```
+
+### 3. `upsertAccount`
+
+Create or update any account. Pass `id` to update an existing account; omit to create new.
+The `AccountInput` type is the existing Zod-validated schema — all fields are the same as
+the current account editor.
+
+Schema-level guards enforced by this tool (not delegated to the LLM):
+- If `drawnFromAccountId` is set, `type` must be `'income'`
+- If `superContributionConfig` is set, `type` must be `'income'`
+- If `basedOnAccountId` is set, the referenced account must exist
+
+```typescript
+upsertAccount(params: { id?: string } & AccountInput): {
+  accountId: string;
+  created: boolean;  // true if new, false if updated
+}
+```
+
+### 4. `deleteAccount`
+
+```typescript
+deleteAccount(params: { accountId: string }): {
+  ok: boolean;
+  transferWarning?: string;  // if another account references this as transferToAccountId
+}
+```
+
+### 5. `upsertEvent`
+
+Create or update a one-time financial event. Pass `id` to update; omit to create.
+
+```typescript
+upsertEvent(params: {
+  id?: string;
+  name: string;
+  year: number;
+  accountId: string;
+  delta: 'credit' | 'debit';
+  amount: number;
+  // optional: if this is a transfer between accounts (not external money)
+  counterpartAccountId?: string;
+}): { eventId: string }
+```
+
+### 6. `manageScenario`
+
+All scenario operations in one tool, discriminated by `op`.
+
+```typescript
+manageScenario(params:
+  | { op: 'create'; name: string; description?: string; cloneBaseline: boolean }
+  | { op: 'activate'; scenarioId: string }
+  | { op: 'override'; scenarioId: string; accountId: string; patch: Partial<AccountInput> }
+  | { op: 'delete'; scenarioId: string }
+): {
+  scenarioId?: string;
+  ok: boolean;
+}
+```
+
+---
+
+## What Lives in Skills (not tools)
+
+Skills are orchestration recipes that chain the 6 primitives. They encode Australian domain
+knowledge so the LLM doesn't have to figure it out from scratch each time.
+
+### Example skill: `setup-salary`
+
+```
+1. call getState() — find or confirm the target asset account (e.g. bank/cash)
+2. call upsertAccount() with:
+     type: 'income'
+     incomeTaxTreatment: 'assessable'
+     depositsToAccountId: <bank-account-id>
+     incomeSubType: 'salary'
+     ... name, amount, growth from user input
+3. call runForecast() — verify no ledgerError or conservationViolation warnings
+4. report back: "Added salary of $X/yr, depositing to <account>"
+```
+
+### Example skill: `setup-employer-sg`
+
+```
+1. call getState() — identify salary account id and super account id
+2. call upsertAccount() with:
+     type: 'income'
+     basedOnAccountId: <salary-id>
+     basedOnPercentage: 0.115  (or user-specified rate)
+     superContributionConfig: {
+       targetAccountId: <super-id>,
+       contributionType: 'concessional'
+     }
+3. call runForecast() — verify SG flows correctly, no cap warnings
+4. report back: contributions figure and remaining cap
+```
+
+### Example skill: `setup-pension-drawdown`
+
+```
+1. call getState() — identify allocated pension account id and cash account id
+2. call upsertAccount() with:
+     type: 'income'
+     name: 'Pension Income'
+     drawnFromAccountId: <ap-account-id>   ← triggers internalTransfer in ledger
+     depositsToAccountId: <cash-account-id>
+     incomeTaxTreatment: 'taxFree'         ← pension phase income
+     amount: <annual drawdown amount>
+3. call runForecast() — verify no conservationViolation (both sides of transfer balanced)
+4. report back: drawdown amount, pension account depletion year if any
+```
+
+### Example skill: `model-early-retirement`
+
+```
+1. call getState()
+2. call manageScenario({ op: 'create', name: 'Early Retirement', cloneBaseline: true })
+3. call manageScenario({ op: 'activate', scenarioId: <new-id> })
+4. find the salary account; call upsertAccount() with updated endsAt
+5. call runForecast() on new scenario — check depletionYear
+6. report difference: "Net worth at 99 drops from $X to $Y; funds last until <year>"
+```
+
+---
+
+## Open Design Questions
+
+These are not resolved yet — record them here until the feature set is settled.
+
+| # | Question | Options | Notes |
+|---|----------|---------|-------|
+| 1 | **Confirmation model** | (a) LLM proposes, user approves each change<br>(b) LLM makes changes, shows diff at end<br>(c) LLM makes changes immediately | Affects how `upsertAccount` is called — optimistic vs staged |
+| 2 | **Person configuration** | Fold into `upsertAccount`? Separate `setPerson` tool? | Birth year, retirement year, preservation age, tax funding account aren't `AccountInput` fields |
+| 3 | **Assumptions tool** | Separate `setAssumptions` tool (tool 7)?<br>Or fold into `manageScenario`? | CPI and growth rate overrides per year range are a common LLM task |
+| 4 | **Context strategy** | Pass full `getState()` in every system message?<br>Pass compact summary? | Affects token cost; full state ~2–5KB per turn |
+| 5 | **Error recovery in skills** | If `upsertAccount` succeeds but `runForecast` returns a conservationViolation, what does the skill do? | Should skills have a retry/undo step, or escalate to user? |
+| 6 | **Batch mutations** | Should `upsertAccount` accept an array, or always one at a time? | One at a time is simpler to debug; array is more efficient for scenario setup |
+
+---
+
+## Deferred: `setAssumptions` (candidate tool 7)
+
+Setting CPI and growth overrides per year range is frequent enough to warrant a dedicated
+tool rather than routing through `manageScenario`. Defer until we know how assumptions feed
+into scenario overrides.
+
+```typescript
+// Candidate — not committed
+setAssumptions(params: {
+  cpi?: number;
+  defaultGrowthRate?: number;
+  overrides?: Array<{
+    assumption: 'cpi' | 'growth';
+    years: { from: number; to: number } | { year: number };
+    value: number;
+  }>;
+}): { ok: boolean }
+```
+
+---
+
+## Coverage Map
+
+| Feature area | Covered by |
+|---|---|
+| Account CRUD | `upsertAccount`, `deleteAccount` |
+| Tax treatment, growth profile, lifecycle | `upsertAccount` fields (existing `AccountInput`) |
+| One-time events | `upsertEvent` |
+| Employer SG | `upsertAccount` + `setup-employer-sg` skill |
+| Pension drawdown | `upsertAccount` + `setup-pension-drawdown` skill |
+| Scenarios (create/override/activate) | `manageScenario` |
+| Forecast read + verification | `runForecast` |
+| State read | `getState` |
+| Persons / forecast config | ⚠️ Open question #2 |
+| Assumptions (CPI, growth overrides) | ⚠️ Deferred (`setAssumptions` candidate) |
+| Salary setup | `upsertAccount` + `setup-salary` skill |
+| Early retirement modelling | `manageScenario` + `model-early-retirement` skill |
