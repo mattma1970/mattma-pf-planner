@@ -144,6 +144,7 @@ export const AccountSchema = z.object({
   endBehavior: EndBehaviorSchema.optional(),
   transferToAccountId: z.string().uuid().optional(),
   depositsToAccountId: z.string().uuid().optional(),
+  drawnFromAccountId: z.string().uuid().optional(), // For pension/drawdown income accounts: debits this asset when income is drawn
   fundedByAccountId: z.string().uuid().optional(),
   order: z.number().int().optional(),
   liquidityType: LiquidityTypeSchema.optional(),

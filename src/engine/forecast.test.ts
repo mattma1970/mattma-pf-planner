@@ -3292,4 +3292,255 @@ describe('calculateForecast', () => {
       expect(lossCarryForward2027!.closing).toBe(20000);
     });
   });
+
+  // ============================================================
+  // Transaction integrity — ledger and conservation checks
+  // ============================================================
+
+  describe('transaction integrity', () => {
+    describe('pension drawdown with drawnFromAccountId', () => {
+      it('debits the pension account and credits cash when drawnFromAccountId is set', () => {
+        const pensionAccount = createTestAccount({
+          id: 'pension-1111-1111-1111-111111111111',
+          name: 'Allocated Pension',
+          type: 'asset',
+          initialValue: 200_000,
+          growthProfile: { type: 'fixed', rate: 0.05 },
+          incomeTaxTreatment: 'taxFree',
+        });
+
+        const cashAccount = createTestAccount({
+          id: 'cash-1111-1111-1111-111111111111',
+          name: 'Cash',
+          type: 'asset',
+          initialValue: 10_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+        });
+
+        // Income account that models the pension drawdown
+        const drawdownAccount = createTestAccount({
+          id: 'drawdown-1111-1111-1111-111111111111',
+          name: 'Pension Income',
+          type: 'income',
+          initialValue: 30_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+          incomeTaxTreatment: 'taxFree',
+          depositsToAccountId: cashAccount.id,
+          drawnFromAccountId: pensionAccount.id,
+        });
+
+        const result = calculateForecast({
+          accounts: [pensionAccount, cashAccount, drawdownAccount],
+          assumptions: defaultAssumptions,
+          epochs: defaultEpochs,
+          events: [],
+          persons: [],
+          settings: testSettings,
+          startYear: 2025,
+          endYear: 2025,
+        });
+
+        const year = result.years[0];
+
+        const pensionResult = year.accounts.find(a => a.accountId === pensionAccount.id)!;
+        const cashResult    = year.accounts.find(a => a.accountId === cashAccount.id)!;
+
+        // Pension grows 5% then drawdown is debited
+        const pensionAfterGrowth = 200_000 * 1.05;
+        expect(pensionResult.endValue).toBeCloseTo(pensionAfterGrowth - 30_000, 0);
+        expect(pensionResult.withdrawals).toBe(30_000);
+
+        // Cash receives the drawdown
+        expect(cashResult.endValue).toBeCloseTo(10_000 + 30_000, 0);
+        expect(cashResult.contributions).toBe(30_000);
+
+        // No conservation violation
+        const violations = year.warnings?.filter(w => w.type === 'conservationViolation') ?? [];
+        expect(violations).toHaveLength(0);
+      });
+
+      it('does NOT debit the pension account when drawnFromAccountId is absent (demonstrates the old bug)', () => {
+        const pensionAccount = createTestAccount({
+          id: 'pension-2222-2222-2222-222222222222',
+          name: 'Allocated Pension',
+          type: 'asset',
+          initialValue: 200_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+        });
+
+        const cashAccount = createTestAccount({
+          id: 'cash-2222-2222-2222-222222222222',
+          name: 'Cash',
+          type: 'asset',
+          initialValue: 10_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+        });
+
+        // No drawnFromAccountId — treated as external income (the old broken model)
+        const drawdownAccount = createTestAccount({
+          id: 'drawdown-2222-2222-2222-222222222222',
+          name: 'Pension Income',
+          type: 'income',
+          initialValue: 30_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+          incomeTaxTreatment: 'taxFree',
+          depositsToAccountId: cashAccount.id,
+          // drawnFromAccountId NOT set
+        });
+
+        const result = calculateForecast({
+          accounts: [pensionAccount, cashAccount, drawdownAccount],
+          assumptions: defaultAssumptions,
+          epochs: defaultEpochs,
+          events: [],
+          persons: [],
+          settings: testSettings,
+          startYear: 2025,
+          endYear: 2025,
+        });
+
+        const year = result.years[0];
+        const pensionResult = year.accounts.find(a => a.accountId === pensionAccount.id)!;
+        const cashResult    = year.accounts.find(a => a.accountId === cashAccount.id)!;
+
+        // Pension balance unchanged — the bug: money appears in cash without leaving pension
+        expect(pensionResult.endValue).toBe(200_000);
+        expect(pensionResult.withdrawals).toBe(0);
+
+        // Cash still grows (the externalIn credit goes through), creating money from thin air
+        expect(cashResult.contributions).toBe(30_000);
+      });
+    });
+
+    describe('ledger error on missing destination account', () => {
+      it('emits a ledgerError warning when depositsToAccountId references a non-existent account', () => {
+        const incomeAccount = createTestAccount({
+          id: 'income-3333-3333-3333-333333333333',
+          name: 'Salary',
+          type: 'income',
+          initialValue: 100_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+          depositsToAccountId: 'does-not-exist-at-all-000000000',
+        });
+
+        const result = calculateForecast({
+          accounts: [incomeAccount],
+          assumptions: defaultAssumptions,
+          epochs: defaultEpochs,
+          events: [],
+          persons: [],
+          settings: testSettings,
+          startYear: 2025,
+          endYear: 2025,
+        });
+
+        const year = result.years[0];
+        const ledgerErrors = year.warnings?.filter(w => w.type === 'ledgerError') ?? [];
+        expect(ledgerErrors.length).toBeGreaterThan(0);
+        expect(ledgerErrors[0].message).toContain('does-not-exist-at-all-000000000');
+      });
+    });
+
+    describe('auto-topup transfer balance', () => {
+      it('debits source and credits target by equal amounts with no conservation violation', () => {
+        const emergencyFund = createTestAccount({
+          id: 'emergency-4444-4444-4444-444444444444',
+          name: 'Emergency Fund',
+          type: 'asset',
+          initialValue: 0,
+          growthProfile: { type: 'fixed', rate: 0 },
+          autoTopup: {
+            enabled: true,
+            threshold: 20_000,
+            fromAccountId: 'bank-4444-4444-4444-444444444444',
+            targetBalance: 20_000,
+          },
+        });
+
+        const bankAccount = createTestAccount({
+          id: 'bank-4444-4444-4444-444444444444',
+          name: 'Bank',
+          type: 'asset',
+          initialValue: 100_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+        });
+
+        const result = calculateForecast({
+          accounts: [emergencyFund, bankAccount],
+          assumptions: defaultAssumptions,
+          epochs: defaultEpochs,
+          events: [],
+          persons: [],
+          settings: testSettings,
+          startYear: 2025,
+          endYear: 2025,
+        });
+
+        const year = result.years[0];
+        const fundResult = year.accounts.find(a => a.accountId === emergencyFund.id)!;
+        const bankResult = year.accounts.find(a => a.accountId === bankAccount.id)!;
+
+        expect(fundResult.endValue).toBe(20_000);
+        expect(fundResult.contributions).toBe(20_000);
+        expect(bankResult.endValue).toBe(80_000);
+        expect(bankResult.withdrawals).toBe(20_000);
+
+        // Transfer is balanced — no conservation violation
+        const violations = year.warnings?.filter(w => w.type === 'conservationViolation') ?? [];
+        expect(violations).toHaveLength(0);
+      });
+    });
+
+    describe('income to expense flow conservation', () => {
+      it('salary deposited to bank and expense drawn from bank produces no conservation violation', () => {
+        const bankAccount = createTestAccount({
+          id: 'bank-5555-5555-5555-555555555555',
+          name: 'Bank',
+          type: 'asset',
+          initialValue: 50_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+        });
+
+        const salaryAccount = createTestAccount({
+          id: 'salary-5555-5555-5555-555555555555',
+          name: 'Salary',
+          type: 'income',
+          initialValue: 100_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+          depositsToAccountId: bankAccount.id,
+        });
+
+        const expenseAccount = createTestAccount({
+          id: 'expense-5555-5555-5555-555555555555',
+          name: 'Living Expenses',
+          type: 'expense',
+          initialValue: 60_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+          fundedByAccountId: bankAccount.id,
+        });
+
+        const result = calculateForecast({
+          accounts: [bankAccount, salaryAccount, expenseAccount],
+          assumptions: defaultAssumptions,
+          epochs: defaultEpochs,
+          events: [],
+          persons: [],
+          settings: testSettings,
+          startYear: 2025,
+          endYear: 2025,
+        });
+
+        const year = result.years[0];
+        const bankResult = year.accounts.find(a => a.accountId === bankAccount.id)!;
+
+        // Bank: +salary −expenses
+        expect(bankResult.endValue).toBe(50_000 + 100_000 - 60_000);
+        expect(bankResult.contributions).toBe(100_000);
+        expect(bankResult.withdrawals).toBe(60_000);
+
+        const violations = year.warnings?.filter(w => w.type === 'conservationViolation') ?? [];
+        expect(violations).toHaveLength(0);
+      });
+    });
+  });
 });
