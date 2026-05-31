@@ -237,12 +237,134 @@ These are not resolved yet — record them here until the feature set is settled
 
 | # | Question | Options | Notes |
 |---|----------|---------|-------|
-| 1 | **Confirmation model** | (a) LLM proposes, user approves each change<br>(b) LLM makes changes, shows diff at end<br>(c) LLM makes changes immediately | Affects how `upsertAccount` is called — optimistic vs staged |
+| 1 | **Confirmation model** | See full discussion below | Largest architectural impact |
 | 2 | **Person configuration** | Fold into `upsertAccount`? Separate `setPerson` tool? | Birth year, retirement year, preservation age, tax funding account aren't `AccountInput` fields |
 | 3 | **Assumptions tool** | Separate `setAssumptions` tool (tool 7)?<br>Or fold into `manageScenario`? | CPI and growth rate overrides per year range are a common LLM task |
 | 4 | **Context strategy** | Pass full `getState()` in every system message?<br>Pass compact summary? | Affects token cost; full state ~2–5KB per turn |
 | 5 | **Error recovery in skills** | If `upsertAccount` succeeds but `runForecast` returns a conservationViolation, what does the skill do? | Should skills have a retry/undo step, or escalate to user? |
 | 6 | **Batch mutations** | Should `upsertAccount` accept an array, or always one at a time? | One at a time is simpler to debug; array is more efficient for scenario setup |
+
+---
+
+## Confirmation Model (Open Question #1)
+
+This is the most consequential architectural decision. It determines whether the tools write
+directly to live state or to a staging layer, and whether the user is in the loop before or
+after mutations happen.
+
+### Option A — Staged: LLM proposes, user approves before commit
+
+The LLM assembles a plan and writes to a **pending / staging store** that is separate from
+live state. Nothing changes in the actual data until the user explicitly approves.
+
+**How the tools would be wired:**
+
+- `upsertAccount`, `deleteAccount`, `upsertEvent` write to a `pendingChanges` map, not to
+  IndexedDB or the Zustand store that drives the spreadsheet.
+- `getState()` reads live state only (so the LLM sees the unchanged baseline while planning).
+- `runForecast()` must accept an optional `preview: pendingChanges` parameter so it can
+  show the user what the numbers would look like after approval, without committing.
+- A `commitPending()` / `discardPending()` action (triggered by the user, not the LLM) applies
+  or rolls back the staged changes atomically.
+- The UI shows pending changes with a visual indicator ("proposed") alongside current values.
+
+**Pros:**
+- Safest for the user — no accidental data loss from a misunderstood instruction.
+- The LLM can produce a full plan (multiple mutations) and show it as a coherent diff before
+  anything takes effect.
+- Naturally atomic: the whole plan is committed or discarded as one unit.
+
+**Cons:**
+- Requires a staging layer that does not currently exist in the app (new Zustand slice or
+  parallel IndexedDB collection).
+- `runForecast()` needs to be able to run against non-live state — either by merging the
+  pending changes in-memory or by duplicating the forecast engine call.
+- Skill prompts must track which actions are "proposed" vs "live", which adds complexity.
+- Two-pass UX: user sees the plan, then approves — adds a click but feels deliberate.
+
+---
+
+### Option B — Optimistic: LLM writes live, shows summary diff at end ✅ Recommended
+
+The LLM writes directly to live state (IndexedDB / Zustand) as it goes, exactly as the
+manual UI does today. At the end of the skill, it reports a human-readable summary of what
+changed. The user can undo the whole conversation turn via a single rollback action.
+
+**How the tools would be wired:**
+
+- `upsertAccount`, `deleteAccount`, `upsertEvent` write directly to the existing Zustand
+  store (same code path as the account editor). No staging layer needed.
+- `getState()` always reads live state — consistent with what the manual UI shows.
+- `runForecast()` always runs against live state — no special preview mode needed.
+- Each LLM turn that makes mutations is bracketed by a **turn snapshot**: before the first
+  tool call, the current state is snapshot-ed; after the last tool call, a diff is generated
+  and shown to the user with an "Undo this turn" button.
+- The undo action restores from the snapshot (replacing IndexedDB records for all changed
+  accounts/events).
+
+**Pros:**
+- No new staging infrastructure — tools reuse the existing mutation path.
+- `runForecast()` is always accurate (it always runs against what is actually stored).
+- Skills are simpler: they just call tools and read results; no "am I in pending mode?" logic.
+- The user sees the spreadsheet update in real time as the LLM works through a multi-step
+  skill — immediate visual feedback.
+
+**Cons:**
+- Intermediate states are briefly visible in the UI (e.g., salary added but SG not yet wired).
+  This can look odd for 1–2 seconds during a multi-step skill.
+- Undo is coarse-grained: the whole turn is undone, not individual mutations.
+- If the LLM crashes mid-turn (e.g., network timeout after step 2 of 4), partial state is
+  left in IndexedDB. The turn snapshot allows full recovery but it needs to be stored
+  reliably.
+
+**Snapshot / undo mechanics:**
+
+```
+Turn starts
+  → snapshot current state (all accounts + events) → store in sessionStorage or IndexedDB
+LLM tool calls execute (write to live state)
+  → user sees spreadsheet updating
+Turn ends
+  → LLM emits summary: "Added salary $120k, wired SG at 11.5% to Super. Forecast shows
+    depletion at 2058. Undo this?"
+User approves silently or clicks Undo
+  → Undo restores from snapshot
+```
+
+---
+
+### Option C — Direct: LLM writes live, no undo
+
+Same as Option B but without the snapshot/undo mechanism. The LLM mutates live state and
+simply reports what it did.
+
+**Wiring:** Identical to Option B minus the snapshot logic.
+
+**Pros:** Simplest implementation — zero new infrastructure.
+
+**Cons:** No safety net. A misunderstood instruction ("remove the old salary account") is
+irreversible. Not appropriate for a tool that manages someone's retirement numbers.
+
+---
+
+### Comparison
+
+| | A — Staged | B — Optimistic + undo | C — Direct |
+|---|---|---|---|
+| New infrastructure needed | Staging store + preview forecast | Turn snapshot + restore | None |
+| Tools write to | Pending store | Live state | Live state |
+| `runForecast` runs against | Pending state (needs preview param) | Live state | Live state |
+| User sees changes | Only after approval | In real time | In real time |
+| Undo granularity | Per plan (atomic) | Per turn (coarse) | None |
+| Partial failure recovery | Discard pending | Restore from snapshot | Manual |
+| Skill complexity | Higher (must track pending vs live) | Low | Low |
+| Implementation effort | High | Medium | Low |
+
+**Recommendation:** Option B. It reuses the existing mutation path with minimal new
+infrastructure (snapshot store only), gives the user real-time feedback as the LLM works,
+and provides a meaningful undo safety net without requiring a full staging architecture.
+The coarse undo granularity is acceptable because skills are designed to be short (2–4
+mutations) and self-contained.
 
 ---
 
