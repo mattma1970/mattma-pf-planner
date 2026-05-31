@@ -241,7 +241,7 @@ These are not resolved yet — record them here until the feature set is settled
 | 2 | **Person configuration** | ✅ Decided: separate `setPerson` tool (tool 7) | Birth year, retirement year, preservation age, tax funding account — natural sentences users will say; needs a clean home for multi-person future |
 | 3 | **Assumptions tool** | ✅ Decided: separate `setAssumptions` tool (tool 8); writes to active scenario | CPI and growth rate overrides per year range; activate scenario first, then call `setAssumptions` |
 | 4 | **Context strategy** | ✅ Decided: compact summary prepended to each user message; system prompt static only | See full discussion below |
-| 5 | **Error recovery in skills** | If `upsertAccount` succeeds but `runForecast` returns a conservationViolation, what does the skill do? | Should skills have a retry/undo step, or escalate to user? |
+| 5 | **Error recovery in skills** | ✅ Decided: one auto-fix attempt if cause is unambiguous; escalate to user if auto-fix fails; never auto-undo without user consent | See rationale below |
 | 6 | **Batch mutations** | Should `upsertAccount` accept an array, or always one at a time? | One at a time is simpler to debug; array is more efficient for scenario setup |
 
 ---
@@ -433,6 +433,46 @@ the system prompt cache since the system prompt is never modified.
 | Admin ("add a salary account") | Compact summary for orientation; `getState()` for IDs before mutating | `getState()` → `upsertAccount()` → `runForecast()` |
 | Specific scenario ("sell house in 2030 not 2040") | Compact summary to confirm correct account; `getState()` for ID | `getState()` → `upsertAccount()` → `runForecast()` |
 | General scenario ("model a market downturn") | Compact summary to ask intelligent follow-up questions; `getState()` when ready to act | Optional web search → `getState()` → `manageScenario()` → `setAssumptions()` → `runForecast()` |
+
+---
+
+## Error Recovery in Skills (Decided)
+
+When a skill mutates state and then calls `runForecast()`, warnings in the result are
+treated as follows:
+
+### `conservationViolation`
+
+The most diagnosable warning — almost always means one side of a transfer pair was not
+emitted. The skill should:
+
+1. **Attempt one auto-fix** if the cause is unambiguous. For example, if a pension income
+   account was created without `drawnFromAccountId`, the skill knows to add it and
+   re-call `upsertAccount()`, then re-run `runForecast()`.
+2. **Escalate to the user** if the auto-fix also fails or the cause is ambiguous. Explain
+   what was done, what the warning means in plain terms, and ask the one clarifying question
+   needed to resolve it. Example:
+   > "I added the pension income account but the forecast shows a transaction integrity
+   > warning — the pension balance isn't decreasing when income is drawn. Which account
+   > should the drawdown come from?"
+3. **Never auto-undo** without user consent. Partial state may still be useful. The user
+   sees the undo option in the turn summary and decides.
+
+### `ledgerError`
+
+Means a referenced account ID does not exist. The skill should escalate immediately —
+this requires a clarifying question (which account did you mean?). No auto-fix attempt.
+
+### `negativeBalance` / `capExceeded`
+
+Informational warnings that don't indicate a broken model — just a consequence of the
+user's configuration. The skill should surface them in its report but not treat them as
+errors requiring recovery.
+
+### `blockedContribution`
+
+Escalate to user — indicates a rule constraint the skill cannot resolve alone (e.g.
+contribution cap exceeded, preservation age not met).
 
 ---
 
