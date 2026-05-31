@@ -237,7 +237,7 @@ These are not resolved yet — record them here until the feature set is settled
 
 | # | Question | Options | Notes |
 |---|----------|---------|-------|
-| 1 | **Confirmation model** | See full discussion below | Largest architectural impact |
+| 1 | **Confirmation model** | ✅ Decided: Option B — optimistic writes + turn-level undo snapshot | See full discussion below |
 | 2 | **Person configuration** | Fold into `upsertAccount`? Separate `setPerson` tool? | Birth year, retirement year, preservation age, tax funding account aren't `AccountInput` fields |
 | 3 | **Assumptions tool** | Separate `setAssumptions` tool (tool 7)?<br>Or fold into `manageScenario`? | CPI and growth rate overrides per year range are a common LLM task |
 | 4 | **Context strategy** | Pass full `getState()` in every system message?<br>Pass compact summary? | Affects token cost; full state ~2–5KB per turn |
@@ -246,7 +246,7 @@ These are not resolved yet — record them here until the feature set is settled
 
 ---
 
-## Confirmation Model (Open Question #1)
+## Confirmation Model (Decided: Option B)
 
 This is the most consequential architectural decision. It determines whether the tools write
 directly to live state or to a staging layer, and whether the user is in the loop before or
