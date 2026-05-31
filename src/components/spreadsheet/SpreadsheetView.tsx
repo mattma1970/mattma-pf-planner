@@ -361,7 +361,29 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                 key={y.year}
                 className="px-3 py-3 text-right text-xs font-medium text-white uppercase tracking-wider"
               >
-                {y.year}
+                <span className="inline-flex items-center gap-1">
+                  {y.year}
+                  {y.conservationLog && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const blob = new Blob([y.conservationLog!], { type: 'text/plain' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `conservation-${y.year}.log`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                      }}
+                      className="text-white/60 hover:text-white transition-colors"
+                      title={`Download transaction log for ${y.year}`}
+                    >
+                      ⬇
+                    </button>
+                  )}
+                </span>
               </th>
             ))}
           </tr>

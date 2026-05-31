@@ -37,6 +37,7 @@ import {
 import { calculateDiv293 } from './taxRules';
 import {
   type LedgerEntry,
+  type ConservationResult,
   emitLedgerEntry,
   applyDeferredLedger,
   checkConservation,
@@ -1025,7 +1026,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
               accountId: account.fundedByAccountId,
               amount: fundingAmount,
               delta: 'debit',
-              kind: 'internalTransfer',
+              kind: 'externalOut',
               label: `Fund asset: ${account.name}`,
               sourceAccountId: account.id,
               sourceAccountName: account.name,
@@ -1186,7 +1187,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             accountId: payoffInfo.fundedByAccountId,
             amount: payoffInfo.amount,
             delta: 'debit',
-            kind: 'internalTransfer',
+            kind: 'externalOut',
             label: `Payoff: ${payoffInfo.liabilityName}`,
             sourceAccountId: account.id,
             sourceAccountName: payoffInfo.liabilityName,
@@ -2027,7 +2028,6 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             remainingTopup -= drawAmount;
           }
         }
-        }
       }
     }
 
@@ -2205,6 +2205,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
 
     // Conservation check — runs after all phases so all ledger entries are accumulated
     const conservation = checkConservation(yearLedgerEntries, accountResults, accounts, year);
+    const accountNames = new Map(accounts.map(a => [a.id, a.name]));
+    const conservationLog = formatConservationLog(conservation, accountNames);
     if (!conservation.passed) {
       yearWarnings.push({
         type: 'conservationViolation',
@@ -2230,6 +2232,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       resolvedAssumptions,
       offBalanceSheet: offBalanceSheet.length > 0 ? offBalanceSheet : undefined,
       warnings: yearWarnings.length > 0 ? yearWarnings : undefined,
+      conservationLog,
     });
   }
 
@@ -2245,6 +2248,37 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       finalAssets,
     },
   };
+}
+
+function formatConservationLog(
+  conservation: ConservationResult,
+  accountNames: Map<string, string>,
+): string {
+  const lines: string[] = [];
+  const y = conservation.year;
+  const d = conservation.details;
+  const status = conservation.passed ? 'PASSED' : 'FAILED';
+  const pad = (n: number) => n < 0 ? `-$${Math.abs(n).toLocaleString()}` : `$${n.toLocaleString()}`;
+
+  lines.push(`=== Conservation Check - Year ${y} ===`);
+  lines.push(`Status: ${status}`);
+  lines.push(`Transfer Imbalance: ${pad(conservation.transferImbalance)}`);
+  lines.push(`Wealth Drift: ${pad(conservation.wealthDrift)}`);
+  lines.push('');
+  lines.push(`Net Wealth: opening=${pad(d.openingNetWealth)}  closing=${pad(d.closingNetWealth)}  actualDelta=${pad(d.actualDelta)}`);
+  lines.push(`Expected: assetGrowth=${pad(d.assetGrowth)}  externalIn=${pad(d.externalIn)}  externalOut=${pad(d.externalOut)}  synthetic=${pad(d.synthetic)}  liabilityChange=${pad(d.liabilityChange)}  total=${pad(d.expectedDelta)}`);
+  lines.push('');
+  lines.push('Ledger Entries:');
+  for (const entry of conservation.entries) {
+    const accName = accountNames.get(entry.accountId) ?? entry.accountId;
+    const delta = entry.delta === 'debit' ? 'Dr' : 'Cr';
+    const amt = pad(entry.amount).padStart(12);
+    const kind = entry.kind.padEnd(16);
+    lines.push(`  ${delta}  ${amt}  ${accName}  ${kind}  ${entry.label}`);
+  }
+  lines.push('');
+
+  return lines.join('\n');
 }
 
 function resolveAssumptions(

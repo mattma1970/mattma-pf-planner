@@ -27,10 +27,12 @@ export interface ConservationResult {
   year: number;
   transferImbalance: number;
   wealthDrift: number;
+  entries: LedgerEntry[];
   details: {
     openingNetWealth: number;
     closingNetWealth: number;
     assetGrowth: number;
+    liabilityChange: number;
     externalIn: number;
     externalOut: number;
     synthetic: number;
@@ -134,6 +136,7 @@ export function checkConservation(
   let openingNetWealth = 0;
   let closingNetWealth = 0;
   let assetGrowth = 0;
+  let liabilityChange = 0;
 
   for (const account of accounts) {
     if (account.includeInNetWorth === false) continue;
@@ -146,6 +149,11 @@ export function checkConservation(
     closingNetWealth += sign * result.endValue;
     // Asset growth reflects price appreciation already baked into endValue
     if (account.type === 'asset') assetGrowth += result.growth;
+    // Liability principal change affects net worth: when liability decreases,
+    // net worth increases by the same amount
+    if (account.type === 'liability') {
+      liabilityChange += -(result.endValue - result.startValue);
+    }
   }
 
   let externalIn = 0;
@@ -160,7 +168,7 @@ export function checkConservation(
     }
   }
 
-  const expectedDelta = assetGrowth + externalIn - externalOut + synthetic;
+  const expectedDelta = assetGrowth + externalIn - externalOut + synthetic + liabilityChange;
   const actualDelta = closingNetWealth - openingNetWealth;
   const wealthDrift = actualDelta - expectedDelta;
 
@@ -172,10 +180,12 @@ export function checkConservation(
     year,
     transferImbalance: transferNet,
     wealthDrift,
+    entries,
     details: {
       openingNetWealth,
       closingNetWealth,
       assetGrowth,
+      liabilityChange,
       externalIn,
       externalOut,
       synthetic,

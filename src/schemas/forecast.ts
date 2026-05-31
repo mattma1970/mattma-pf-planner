@@ -74,6 +74,7 @@ export const YearResultSchema = z.object({
   resolvedAssumptions: ResolvedAssumptionsSchema,
   offBalanceSheet: z.array(OffBalanceSheetItemSchema).optional(),
   warnings: z.array(ForecastWarningSchema).optional(),
+  conservationLog: z.string().optional(),
 });
 export type YearResult = z.infer<typeof YearResultSchema>;
 

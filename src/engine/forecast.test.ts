@@ -3768,7 +3768,7 @@ const result = calculateForecast({
           autoTopup: {
             enabled: true,
             threshold: 20_000,
-            fromAccountId: 'bank-4444-4444-4444-444444444444',
+            fromAccountIds: ['bank-4444-4444-4444-444444444444'],
             targetBalance: 20_000,
           },
         });
