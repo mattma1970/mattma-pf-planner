@@ -4248,4 +4248,181 @@ const result = calculateForecast({
       });
     });
   });
+
+  describe('account reconciliation and fundedBy verification', () => {
+    it('does not emit reconciliation warnings for a complex valid scenario', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-9999-9999-9999-999999999999',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 100_000,
+        growthProfile: { type: 'fixed', rate: 0.04 },
+      });
+
+      const houseAccount = createTestAccount({
+        id: 'house-9999-9999-9999-999999999999',
+        name: 'House',
+        type: 'asset',
+        initialValue: 500_000,
+        growthProfile: { type: 'fixed', rate: 0.03 },
+        fundedByAccountId: bankAccount.id,
+        startCondition: { type: 'year', year: 2025 },
+      });
+
+      const salaryAccount = createTestAccount({
+        id: 'salary-9999-9999-9999-999999999999',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 80_000,
+        growthProfile: { type: 'fixed', rate: 0.02 },
+        depositsToAccountId: bankAccount.id,
+      });
+
+      const expenseAccount = createTestAccount({
+        id: 'expense-9999-9999-9999-999999999999',
+        name: 'Expenses',
+        type: 'expense',
+        initialValue: 40_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+      });
+
+      const mortgageAccount = createTestAccount({
+        id: 'mortgage-9999-9999-9999-999999999999',
+        name: 'Mortgage',
+        type: 'liability',
+        initialValue: 300_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        interestRate: 0.05,
+        annualPayment: 20_000,
+        fundedByAccountId: bankAccount.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, houseAccount, salaryAccount, expenseAccount, mortgageAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [defaultPerson],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2030,
+      });
+
+      for (const year of result.years) {
+        const reconciliationWarnings = year.warnings?.filter(
+          (w) => w.type === 'other' && w.message?.includes('reconciliation failed'),
+        ) ?? [];
+        expect(reconciliationWarnings).toHaveLength(0);
+      }
+    });
+
+    it('emits fundedBy completeness warning when asset purchase is not recorded in funding account', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-7777-7777-7777-777777777777',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 1_000_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      // This asset has fundedByAccountId but initialValue = 0 and no events,
+      // so fundingAmount = 0 and no "Fund asset" entry is created.
+      // The completeness check should flag it in the first active year.
+      const zeroValueAsset = createTestAccount({
+        id: 'zero-7777-7777-7777-777777777777',
+        name: 'Zero Value Asset',
+        type: 'asset',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+        startCondition: { type: 'year', year: 2026 },
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, zeroValueAsset],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      // 2025: asset not active yet — no warning
+      const year2025 = result.years.find((y) => y.year === 2025)!;
+      const warning2025 = year2025.warnings?.filter(
+        (w) => w.type === 'other' && w.message?.includes('Zero Value Asset'),
+      ) ?? [];
+      expect(warning2025).toHaveLength(0);
+
+      // 2026: first active year — fundedBy completeness warning should fire
+      const year2026 = result.years.find((y) => y.year === 2026)!;
+      const warning2026 = year2026.warnings?.filter(
+        (w) => w.type === 'other' && w.message?.includes('Zero Value Asset'),
+      ) ?? [];
+      expect(warning2026).toHaveLength(1);
+      expect(warning2026[0].severity).toBe('error');
+      expect(warning2026[0].message).toContain('no funding transaction was recorded');
+      expect(warning2026[0].accountId).toBe(zeroValueAsset.id);
+
+      // 2027: not the first active year — no warning
+      const year2027 = result.years.find((y) => y.year === 2027)!;
+      const warning2027 = year2027.warnings?.filter(
+        (w) => w.type === 'other' && w.message?.includes('Zero Value Asset'),
+      ) ?? [];
+      expect(warning2027).toHaveLength(0);
+    });
+
+    it('does not emit fundedBy warning when funding is properly recorded', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-6666-6666-6666-666666666666',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 1_000_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const fundedAsset = createTestAccount({
+        id: 'asset-6666-6666-6666-666666666666',
+        name: 'Funded Asset',
+        type: 'asset',
+        initialValue: 200_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+        startCondition: { type: 'year', year: 2026 },
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, fundedAsset],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      // 2026: first active year, funding should be recorded
+      const year2026 = result.years.find((y) => y.year === 2026)!;
+      const bankResult = year2026.accounts.find((a) => a.accountId === bankAccount.id)!;
+      const fundedByEntry = bankResult.cashflowDetails?.find(
+        (d) => d.description === 'Fund asset: Funded Asset',
+      );
+      expect(fundedByEntry).toBeDefined();
+      expect(fundedByEntry?.amount).toBe(200_000);
+      expect(fundedByEntry?.type).toBe('withdrawal');
+
+      // No fundedBy completeness warning
+      const warnings = year2026.warnings?.filter(
+        (w) => w.type === 'other' && w.message?.includes('Funded Asset'),
+      ) ?? [];
+      expect(warnings).toHaveLength(0);
+
+      // Bank balance should be reduced by the purchase
+      expect(bankResult.endValue).toBe(800_000);
+    });
+  });
 });
