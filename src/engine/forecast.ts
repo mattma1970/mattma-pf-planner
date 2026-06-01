@@ -701,6 +701,11 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       
       // Track user transfers as transfers (both in and out)
       transfers += userTransferChange;
+      if (userTransferChange > 0) {
+        details.push({ description: 'Transfer in', amount: userTransferChange, type: 'contribution' });
+      } else if (userTransferChange < 0) {
+        details.push({ description: 'Transfer out', amount: -userTransferChange, type: 'withdrawal' });
+      }
       
       // Track super contributions as contributions (not transfers)
       contributions += superContributionChange;
@@ -1223,6 +1228,55 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         endValue,
         cashflowDetails: details,
       });
+    }
+
+    // ===========================================
+    // ACCOUNT RECONCILIATION & VERIFICATION
+    // ===========================================
+
+    for (const account of accounts) {
+      const result = accountResults.get(account.id);
+      if (!result) continue;
+
+      // 1. Verify that contributions - withdrawals + transfers + growth + startValue = endValue
+      // This catches missing or double-counted flows. Skip for income/expense accounts
+      // because they reset each year and have special endValue semantics.
+      if (account.type !== 'income' && account.type !== 'expense') {
+        const expectedEndValue = result.startValue + result.growth + result.contributions - result.withdrawals + result.transfers;
+        const discrepancy = Math.abs(result.endValue - expectedEndValue);
+        if (discrepancy > 1) {
+          yearWarnings.push({
+            type: 'other',
+            severity: 'error',
+            message: `${account.name} (${year}) reconciliation failed: expected $${expectedEndValue.toLocaleString()}, got $${result.endValue.toLocaleString()}`,
+            details: `Discrepancy: $${discrepancy.toLocaleString()}. This means a flow was recorded incorrectly or is missing from the accounting totals.`,
+            accountId: account.id,
+            amount: discrepancy,
+          });
+        }
+      }
+
+      // 2. Verify fundedBy completeness: every asset with fundedByAccountId
+      // must have a corresponding "Fund asset" entry in its funding account
+      // in the FIRST active year (the purchase year).
+      if (account.type === 'asset' && account.fundedByAccountId && accountStartYears.get(account.id) === year) {
+        const fundingResult = accountResults.get(account.fundedByAccountId);
+        if (fundingResult) {
+          const fundedByEntries = (fundingResult.cashflowDetails ?? []).filter(
+            (d) => d.sourceAccountId === account.id && d.description.startsWith('Fund asset:'),
+          );
+          if (fundedByEntries.length === 0) {
+            yearWarnings.push({
+              type: 'other',
+              severity: 'error',
+              message: `${account.name} is funded by ${fundingResult.startValue > 0 ? 'an account' : 'another account'}, but no funding transaction was recorded in ${year}.`,
+              details: `Expected a 'Fund asset: ${account.name}' entry in the funding account's transactions. The $${account.initialValue.toLocaleString()} purchase may not have been deducted from the funding account.`,
+              accountId: account.id,
+              amount: account.initialValue,
+            });
+          }
+        }
+      }
     }
 
     // Handle events without affected accounts
