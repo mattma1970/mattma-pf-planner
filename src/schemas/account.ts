@@ -141,6 +141,10 @@ export const AccountSchema = z.object({
   returnBalanceMethod: z.enum(['opening', 'closing', 'average']).optional(), // Balance method for return calculation
   returnTaxTreatment: z.enum(['asIncome', 'taxFree']).optional(), // Tax treatment for returns (for pension accounts)
   incomeTargetAccountId: z.string().uuid().optional(),
+  // For allocated pensions: separate target for mandatory drawdowns (falls back to incomeTargetAccountId)
+  drawdownTargetAccountId: z.string().uuid().optional(),
+  // Scale factor applied to the minimum drawdown rate (1.0 = minimum required, 1.5 = 150% of minimum, etc.)
+  drawdownScale: z.number().min(0).optional(),
   startCondition: AccountConditionSchema.optional(),
   endCondition: AccountConditionSchema.optional(),
   endBehavior: EndBehaviorSchema.optional(),

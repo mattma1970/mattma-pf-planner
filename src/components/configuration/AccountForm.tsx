@@ -99,7 +99,9 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
   const [returnBalanceMethod, setReturnBalanceMethod] = useState<'opening' | 'closing' | 'average'>(account?.returnBalanceMethod ?? 'average');
   const [returnTaxTreatment, setReturnTaxTreatment] = useState<'asIncome' | 'taxFree'>(account?.returnTaxTreatment ?? 'asIncome');
   const [frankingPercentage, setFrankingPercentage] = useState(account?.frankingPercentage !== undefined ? (account.frankingPercentage * 100).toString() : '');
-  const [incomeTargetAccountId, setIncomeTargetAccountId] = useState(account?.incomeTargetAccountId ?? (account ? '' : defaultBankAccount));
+  const [incomeTargetAccountId, setIncomeTargetAccountId] = useState(account?.incomeTargetAccountId ?? '');
+  const [drawdownTargetAccountId, setDrawdownTargetAccountId] = useState(account?.drawdownTargetAccountId ?? '');
+  const [drawdownScale, setDrawdownScale] = useState(account?.drawdownScale !== undefined ? (account.drawdownScale * 100).toString() : '');
   const [liquidityType, setLiquidityType] = useState<LiquidityType | ''>(account?.liquidityType ?? '');
 
   // Tax settings
@@ -154,7 +156,7 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
 
   const otherAccounts = accounts.filter((a) => a.id !== account?.id);
   const assetAccounts = accounts.filter((a) => a.type === 'asset' && a.id !== account?.id);
-  const assetAccountsAll = accounts.filter((a) => a.type === 'asset');
+  const incomeAccounts = accounts.filter((a) => a.type === 'income' && a.id !== account?.id);
   const superAccounts = accounts.filter((a) => a.type === 'asset' && (a.assetSubType === 'superannuation' || a.assetSubType === 'allocatedPension') && a.id !== account?.id);
   
   // For derived income, also include any income account (for flexibility)
@@ -170,6 +172,8 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
   const requiresDepositsTo = type === 'income' && !isDerivedSuperIncome;
   const requiresFundedBy = type === 'expense' || type === 'liability';
   const requiresIncomeTarget = type === 'asset' && returnRate !== '';
+  const isAllocatedPension = type === 'asset' && assetSubType === 'allocatedPension';
+  const warnsIncomeTargetForPension = isAllocatedPension && !incomeTargetAccountId;
   const requiresTransferTo = endConditionType !== 'none' && (endBehavior === 'transfer' || endBehavior === 'sell' || endBehavior === 'sellNoCgt');
   const requiresSuperTarget = isDerivedSuperIncome;
 
@@ -205,7 +209,15 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       errors.push(`${type === 'expense' ? 'Expense' : 'Liability'} accounts require a "Funded By" account`);
     }
     if (requiresIncomeTarget && !incomeTargetAccountId) {
-      errors.push('Assets with a return rate require a "Generates Income To" account');
+      errors.push('Assets with a return rate require a target income account');
+    }
+    if (requiresIncomeTarget && incomeTargetAccountId) {
+      const target = accounts.find((a) => a.id === incomeTargetAccountId);
+      if (!target) {
+        errors.push('The selected income target account no longer exists');
+      } else if (target.type !== 'income') {
+        errors.push(`"${target.name}" is a ${target.type} account. Investment returns must target an income account.`);
+      }
     }
     if (requiresTransferTo && !transferToAccountId) {
       errors.push('Accounts with sell or transfer end behavior require a destination account');
@@ -215,6 +227,9 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
     }
     if (type === 'income' && basedOnAccountId && !basedOnPercentage) {
       errors.push('Derived income accounts require a percentage');
+    }
+    if (warnsIncomeTargetForPension) {
+      errors.push('Allocated pensions should have a target income account so mandatory drawdowns can be deposited.');
     }
 
     if (errors.length > 0) {
@@ -278,6 +293,8 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
       returnRate: type === 'asset' && returnRate ? parseFloat(returnRate) / 100 : undefined,
       frankingPercentage: type === 'asset' && frankingPercentage ? parseFloat(frankingPercentage) / 100 : undefined,
       incomeTargetAccountId: type === 'asset' && incomeTargetAccountId ? incomeTargetAccountId : undefined,
+      drawdownTargetAccountId: type === 'asset' && isAllocatedPension && drawdownTargetAccountId ? drawdownTargetAccountId : undefined,
+      drawdownScale: type === 'asset' && isAllocatedPension && drawdownScale ? parseFloat(drawdownScale) / 100 : undefined,
       returnBalanceMethod: type === 'asset' && returnRate ? returnBalanceMethod : undefined,
       returnTaxTreatment: type === 'asset' && returnRate ? returnTaxTreatment : undefined,
       liquidityType: type === 'asset' && liquidityType ? liquidityType : undefined,
@@ -495,6 +512,35 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
             </p>
           </div>
           
+          {assetSubType === 'allocatedPension' && (
+            <div className="mt-3 space-y-3">
+              <Select
+                label="Drawdown Target Account"
+                hint="Income account to receive mandatory drawdowns (defaults to Target Income Account if not set)"
+                value={drawdownTargetAccountId}
+                onChange={(e) => setDrawdownTargetAccountId(e.target.value)}
+              >
+                <option value="">{incomeTargetAccountId ? 'Same as Target Income Account' : 'Select income account...'}</option>
+                {incomeAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </Select>
+
+              <Input
+                label="Drawdown Scale (%)"
+                type="number"
+                step="1"
+                min="100"
+                value={drawdownScale}
+                onChange={(e) => setDrawdownScale(e.target.value)}
+                placeholder="e.g. 100 for minimum, 150 for 1.5x"
+              />
+              <p className="text-xs text-purple-600">
+                100% = legal minimum. Increase to withdraw more (e.g., 150% = 1.5x the required minimum).
+              </p>
+            </div>
+          )}
+
           {assetSubType === 'superannuation' && (
             <div className="mt-3 text-xs text-purple-600 space-y-1">
               <p>💡 Tip: Use an end condition at retirement age to trigger a transfer to an Allocated Pension account.</p>
@@ -847,24 +893,28 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
           
           <div className="mb-4">
             <Select
-              label="Deposit to Account"
-              hint="Account to receive investment returns"
+              label={isAllocatedPension ? 'Target Income Account (drawdowns + returns)' : 'Target Income Account'}
+              hint={isAllocatedPension
+                ? 'Income account to receive mandatory drawdowns and investment returns'
+                : 'Income account to receive investment returns'}
               value={incomeTargetAccountId}
               onChange={(e) => setIncomeTargetAccountId(e.target.value)}
             >
-              <option value="">{returnRate ? 'Select account...' : 'None'}</option>
-              {assetAccountsAll.map((a) => (
+              <option value="">{returnRate || isAllocatedPension ? 'Select income account...' : 'None'}</option>
+              {incomeAccounts.map((a) => (
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
             </Select>
           </div>
-          
+
           <p className="text-xs text-gray-500">
-            {returnTaxTreatment === 'taxFree' 
-              ? 'Returns are not taxed (e.g., pension phase). Tax treatment set to Tax Free.'
-              : returnRate 
-                ? 'Returns are added to income and taxed at your marginal rate. Franking credits gross up the income and provide a tax offset.'
-                : 'Select an income account to receive investment returns.'}
+            {isAllocatedPension
+              ? 'Mandatory pension drawdowns and any investment returns are deposited to this income account. The income account then deposits to its configured bank account.'
+              : returnTaxTreatment === 'taxFree'
+                ? 'Returns are not taxed (e.g., pension phase). Tax treatment set to Tax Free.'
+                : returnRate
+                  ? 'Returns are added to income and taxed at your marginal rate. Franking credits gross up the income and provide a tax offset. Cash flows to the asset set by the income account.'
+                  : 'Select an income account to receive investment returns.'}
           </p>
         </div>
       )}

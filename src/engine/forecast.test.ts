@@ -3389,6 +3389,316 @@ const result = calculateForecast({
       }
     });
 
+    it('forwards investment returns through an income account to its depositsToAccountId', () => {
+      const incomeAccount = createTestAccount({
+        id: 'income-4444-4444-4444-444444444444',
+        name: 'Investment Income',
+        type: 'income',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: 'bank-5555-5555-5555-555555555555',
+      });
+
+      const bankAccount = createTestAccount({
+        id: 'bank-5555-5555-5555-555555555555',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        returnRate: 0.10,
+        incomeTargetAccountId: 'income-4444-4444-4444-444444444444',
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, incomeAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      // Year 1: bank 100,000 * 10% = 10,000 return
+      const year2025 = result.years[0];
+      const income2025 = year2025.accounts.find((a) => a.accountId === incomeAccount.id)!;
+      const bank2025 = year2025.accounts.find((a) => a.accountId === bankAccount.id)!;
+      expect(income2025.endValue).toBe(10000);
+      expect(bank2025.endValue).toBe(110000);
+
+      // Year 2: bank 110,000 * 10% = 11,000 return
+      const year2026 = result.years[1];
+      const income2026 = year2026.accounts.find((a) => a.accountId === incomeAccount.id)!;
+      const bank2026 = year2026.accounts.find((a) => a.accountId === bankAccount.id)!;
+      expect(income2026.endValue).toBe(11000);
+      expect(bank2026.endValue).toBe(121000);
+
+      // Year 3: bank 121,000 * 10% = 12,100 return
+      const year2027 = result.years[2];
+      const income2027 = year2027.accounts.find((a) => a.accountId === incomeAccount.id)!;
+      const bank2027 = year2027.accounts.find((a) => a.accountId === bankAccount.id)!;
+      expect(income2027.endValue).toBe(12100);
+      expect(bank2027.endValue).toBe(133100);
+    });
+
+    it('calculates returns on event-inflated balance when opening balance is zero (regression)', () => {
+      // Bug: returns were skipped when balanceForGrowth was zero even if endValue was large.
+      // This happens when an asset receives a large assetChange event but starts the year at $0.
+      const incomeAccount = createTestAccount({
+        id: 'income-event-1111-1111-1111-111111111111',
+        name: 'Investment Income',
+        type: 'income',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: 'bank-event-1111-1111-1111-111111111111',
+      });
+
+      const bankAccount = createTestAccount({
+        id: 'bank-event-1111-1111-1111-111111111111',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        returnRate: 0.10,
+        returnBalanceMethod: 'closing',
+        incomeTargetAccountId: 'income-event-1111-1111-1111-111111111111',
+      });
+
+      // House sale event: credit bank with $1,000,000
+      const houseSaleEvent: Event = {
+        id: 'event-house-sale-000000000000',
+        year: 2025,
+        type: 'assetChange',
+        description: 'House sale proceeds',
+        amount: 1000000,
+        affectedAccountId: bankAccount.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, incomeAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [houseSaleEvent],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const incomeResult = year2025.accounts.find((a) => a.accountId === incomeAccount.id)!;
+      const bankResult = year2025.accounts.find((a) => a.accountId === bankAccount.id)!;
+
+      // Bank: opening 0 + event 1,000,000 + return 100,000 = 1,100,000
+      expect(bankResult.endValue).toBe(1100000);
+      // Income: return = 10% of 1,000,000 = 100,000
+      expect(incomeResult.endValue).toBe(100000);
+    });
+
+    it('deposits investment returns to the bank account in the same year (exact user scenario)', () => {
+      // Exact scenario: asset $100, 10% return, targets income account,
+      // income account deposits to a separate bank account
+      const investmentReturns = createTestAccount({
+        id: 'income-ret-1111-1111-1111-111111111111',
+        name: 'Investment Returns',
+        type: 'income',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: 'bank-2222-2222-2222-222222222222',
+      });
+
+      const bankAccount = createTestAccount({
+        id: 'bank-2222-2222-2222-222222222222',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 50,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const assetAccount = createTestAccount({
+        id: 'asset-3333-3333-3333-333333333333',
+        name: 'Investment Asset',
+        type: 'asset',
+        initialValue: 100,
+        growthProfile: { type: 'fixed', rate: 0 },
+        returnRate: 0.10,
+        incomeTargetAccountId: 'income-ret-1111-1111-1111-111111111111',
+      });
+
+      const result = calculateForecast({
+        accounts: [assetAccount, investmentReturns, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const incomeResult = year2025.accounts.find((a) => a.accountId === investmentReturns.id)!;
+      const bankResult = year2025.accounts.find((a) => a.accountId === bankAccount.id)!;
+      const assetResult = year2025.accounts.find((a) => a.accountId === assetAccount.id)!;
+
+      // Income account should show the return
+      expect(incomeResult.endValue).toBe(10);
+
+      // Bank account should receive the return (50 + 10 = 60)
+      expect(bankResult.endValue).toBe(60);
+
+      // Asset should still be 100 (return is income, not capital growth)
+      expect(assetResult.endValue).toBe(100);
+    });
+
+    it('forwards investment returns when income account also has its own income', () => {
+      const salaryAccount = createTestAccount({
+        id: 'income-salary-4444-4444-4444-444444444444',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: 'bank-5555-5555-5555-555555555555',
+      });
+
+      const dividendAccount = createTestAccount({
+        id: 'income-div-4444-4444-4444-444444444444',
+        name: 'Dividends',
+        type: 'income',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: 'bank-5555-5555-5555-555555555555',
+      });
+
+      const bankAccount = createTestAccount({
+        id: 'bank-5555-5555-5555-555555555555',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 200000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        returnRate: 0.10,
+        incomeTargetAccountId: 'income-div-4444-4444-4444-444444444444',
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, salaryAccount, dividendAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      // Year 1: bank 200,000 * 10% = 20,000 return to Dividends
+      const year2025 = result.years[0];
+      const salary2025 = year2025.accounts.find((a) => a.accountId === salaryAccount.id)!;
+      const div2025 = year2025.accounts.find((a) => a.accountId === dividendAccount.id)!;
+      const bank2025 = year2025.accounts.find((a) => a.accountId === bankAccount.id)!;
+
+      expect(salary2025.endValue).toBe(100000);
+      expect(div2025.endValue).toBe(20000);
+      // Bank: 200,000 + 100,000 (salary) + 20,000 (return) = 320,000
+      expect(bank2025.endValue).toBe(320000);
+
+      // Year 2: bank 320,000 * 10% = 32,000 return
+      const year2026 = result.years[1];
+      const salary2026 = year2026.accounts.find((a) => a.accountId === salaryAccount.id)!;
+      const div2026 = year2026.accounts.find((a) => a.accountId === dividendAccount.id)!;
+      const bank2026 = year2026.accounts.find((a) => a.accountId === bankAccount.id)!;
+
+      expect(salary2026.endValue).toBe(100000);
+      expect(div2026.endValue).toBe(32000);
+      // Bank: 320,000 + 100,000 (salary) + 32,000 (return) = 452,000
+      expect(bank2026.endValue).toBe(452000);
+    });
+
+    it('warns when incomeTargetAccountId points to a non-income account (stale data)', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-4444-4444-4444-444444444444',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 50,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const assetAccount = createTestAccount({
+        id: 'asset-5555-5555-5555-555555555555',
+        name: 'Investment Asset',
+        type: 'asset',
+        initialValue: 100,
+        growthProfile: { type: 'fixed', rate: 0 },
+        returnRate: 0.10,
+        incomeTargetAccountId: 'bank-4444-4444-4444-444444444444', // Stale: targets an asset
+      });
+
+      const result = calculateForecast({
+        accounts: [assetAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const warning = year2025.warnings?.find(
+        (w) => w.type === 'other' && w.message.includes('Bank Account')
+      );
+      expect(warning).toBeDefined();
+      expect(warning!.severity).toBe('warning');
+      expect(warning!.message).toContain('asset account');
+    });
+
+    it('forwards investment returns with closing balance method', () => {
+      const incomeAccount = createTestAccount({
+        id: 'income-4444-4444-4444-444444444444',
+        name: 'Investment Income',
+        type: 'income',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: 'bank-5555-5555-5555-555555555555',
+      });
+
+      const bankAccount = createTestAccount({
+        id: 'bank-5555-5555-5555-555555555555',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        returnRate: 0.10,
+        returnBalanceMethod: 'closing',
+        incomeTargetAccountId: 'income-4444-4444-4444-444444444444',
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, incomeAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2025 = result.years[0];
+      const income2025 = year2025.accounts.find((a) => a.accountId === incomeAccount.id)!;
+      const bank2025 = year2025.accounts.find((a) => a.accountId === bankAccount.id)!;
+      expect(income2025.endValue).toBe(10000);
+      expect(bank2025.endValue).toBe(110000);
+
+      const year2026 = result.years[1];
+      const income2026 = year2026.accounts.find((a) => a.accountId === incomeAccount.id)!;
+      const bank2026 = year2026.accounts.find((a) => a.accountId === bankAccount.id)!;
+      expect(income2026.endValue).toBe(11000);
+      expect(bank2026.endValue).toBe(121000);
+    });
+
     it('applies minimum drawdown for allocated pension at age under 65 (4%)', () => {
       const person: Person = {
         id: 'person-6666-6666-6666-666666666666',
@@ -3561,6 +3871,85 @@ const result = calculateForecast({
       expect(pensionResult.cashflowDetails!.length).toBe(1);
       expect(pensionResult.cashflowDetails![0].type).toBe('withdrawal');
       expect(pensionResult.cashflowDetails![0].amount).toBe(25000);
+
+      expect(bankResult.cashflowDetails).toBeDefined();
+      expect(bankResult.cashflowDetails!.length).toBe(1);
+      expect(bankResult.cashflowDetails![0].type).toBe('contribution');
+      expect(bankResult.cashflowDetails![0].amount).toBe(25000);
+      expect(bankResult.cashflowDetails![0].sourceAccountId).toBe(pensionAccount.id);
+    });
+
+    it('forwards pension drawdown through an income account to its depositsToAccountId', () => {
+      const person: Person = {
+        id: 'person-draw-1111-1111-1111-111111111111',
+        name: 'Test Person',
+        birthYear: 1955, // Age 70 in 2025
+      };
+
+      const incomeAccount = createTestAccount({
+        id: 'income-draw-1111-1111-1111-111111111111',
+        name: 'Pension Income',
+        type: 'income',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: 'bank-draw-1111-1111-1111-111111111111',
+      });
+
+      const bankAccount = createTestAccount({
+        id: 'bank-draw-1111-1111-1111-111111111111',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 50000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const pensionAccount = createTestAccount({
+        id: 'pension-draw-1111-1111-1111-111111111111',
+        name: 'Allocated Pension',
+        type: 'asset',
+        assetSubType: 'allocatedPension',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        owner: person.id,
+        incomeTargetAccountId: 'income-draw-1111-1111-1111-111111111111',
+      });
+
+      const result = calculateForecast({
+        accounts: [pensionAccount, incomeAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [person],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const year2025 = result.years[0];
+      const pensionResult = year2025.accounts.find((a) => a.accountId === pensionAccount.id)!;
+      const incomeResult = year2025.accounts.find((a) => a.accountId === incomeAccount.id)!;
+      const bankResult = year2025.accounts.find((a) => a.accountId === bankAccount.id)!;
+
+      // Minimum drawdown for age 65-74 = 5% of 500000 = 25000
+      expect(pensionResult.withdrawals).toBe(25000);
+      expect(pensionResult.endValue).toBe(475000);
+
+      // Income account should receive the drawdown
+      expect(incomeResult.endValue).toBe(25000);
+
+      // Bank should receive the drawdown via the income account's depositsToAccountId
+      expect(bankResult.endValue).toBe(75000); // 50000 + 25000
+
+      // Cashflow details should exist on all three accounts
+      expect(pensionResult.cashflowDetails).toBeDefined();
+      expect(pensionResult.cashflowDetails!.length).toBe(1);
+      expect(pensionResult.cashflowDetails![0].type).toBe('withdrawal');
+      expect(pensionResult.cashflowDetails![0].amount).toBe(25000);
+
+      expect(incomeResult.cashflowDetails).toBeDefined();
+      expect(incomeResult.cashflowDetails!.length).toBe(1);
+      expect(incomeResult.cashflowDetails![0].type).toBe('contribution');
+      expect(incomeResult.cashflowDetails![0].amount).toBe(25000);
 
       expect(bankResult.cashflowDetails).toBeDefined();
       expect(bankResult.cashflowDetails!.length).toBe(1);

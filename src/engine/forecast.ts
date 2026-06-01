@@ -607,6 +607,53 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
     }
 
     // ===========================================
+    // PHASE 3b: Pre-compute fundedBy outflows per funding account
+    // fundedBy debits must be known before the funding account is processed
+    // so they can be included in the balance used for growth/return calculations.
+    // ===========================================
+
+    const fundedByOutflows = new Map<string, number>();
+    const fundedByDetails = new Map<string, { accountId: string; accountName: string; amount: number }[]>();
+
+    for (const account of accounts) {
+      if (account.type !== 'asset' || !account.fundedByAccountId) continue;
+
+      const isFirstActive = accountStartYears.get(account.id) === year;
+      const lifecycleChange = lifecycleFlows.get(account.id) ?? 0;
+      const superContributionChange = superContributionFlows.get(account.id) ?? 0;
+      const lifecycleContribution = Math.max(0, lifecycleChange);
+
+      let eventContributions = 0;
+      let eventWithdrawals = 0;
+      for (const event of yearEvents) {
+        if (event.affectedAccountId === account.id) {
+          if (event.type === 'income' || event.type === 'assetChange') {
+            eventContributions += event.amount;
+          } else if (event.type === 'expense' || event.type === 'liabilityChange') {
+            eventWithdrawals += event.amount;
+          }
+        }
+      }
+
+      // Match the account-loop logic: contributions = lifecycle + super + events
+      const contributions = lifecycleContribution + superContributionChange + eventContributions;
+      const userContributions = contributions - lifecycleContribution - superContributionChange;
+      let fundingAmount = userContributions - eventWithdrawals;
+      if (isFirstActive) {
+        fundingAmount += account.initialValue;
+      }
+
+      if (fundingAmount > 0) {
+        const existing = fundedByOutflows.get(account.fundedByAccountId) ?? 0;
+        fundedByOutflows.set(account.fundedByAccountId, existing + fundingAmount);
+
+        const details = fundedByDetails.get(account.fundedByAccountId) ?? [];
+        details.push({ accountId: account.id, accountName: account.name, amount: fundingAmount });
+        fundedByDetails.set(account.fundedByAccountId, details);
+      }
+    }
+
+    // ===========================================
     // PHASE 4 & 5: Process each account - apply growth and derived flows
     // ===========================================
     
@@ -641,7 +688,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       let withdrawals = 0;
       let transfers = 0;
       let endValue = openingValue;
-      const details: { description: string; amount: number; type: 'contribution' | 'withdrawal'; sourceAccountId?: string }[] = [];
+      const details: { description: string; amount: number; type: 'contribution' | 'withdrawal'; sourceAccountId?: string; sourceAccountName?: string }[] = [];
       
       // Track lifecycle transfers: outflows as transfers, inflows as contributions
       const lifecycleContribution = Math.max(0, lifecycleChange);
@@ -665,17 +712,35 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         }
       }
 
+      // Pre-compute net event flows for this account so they can be included in the
+      // growth base alongside transfers. All flows (transfers + events) happen during
+      // the year and should affect the balance used for growth/return calculations.
+      let eventNetChange = 0;
+      for (const event of yearEvents) {
+        if (event.affectedAccountId === account.id) {
+          if (event.type === 'income' || event.type === 'assetChange') {
+            eventNetChange += event.amount;
+          } else if (event.type === 'expense' || event.type === 'liabilityChange') {
+            eventNetChange -= event.amount;
+          }
+        }
+      }
+
+      // Include fundedBy outflows (money this account spent to fund other assets)
+      const fundedByChange = -(fundedByOutflows.get(account.id) ?? 0);
+
       if (isActive && !isLifecycleEnding) {
         // Calculate balance for growth based on settings.growthCalculationMethod
-        const totalTransfers = lifecycleChange + userTransferChange + superContributionChange;
+        // Include ALL flows: lifecycle, user, super, events, and fundedBy outflows
+        const totalNetChange = lifecycleChange + userTransferChange + superContributionChange + eventNetChange + fundedByChange;
         let balanceForGrowth: number;
-        
+
         if (settings.growthCalculationMethod === 'averageBalance') {
-          // Average balance: opening + 0.5 * all transfers (assumes mid-year transactions)
-          balanceForGrowth = openingValue + 0.5 * totalTransfers;
+          // Average balance: opening + 0.5 * all net flows (assumes mid-year transactions)
+          balanceForGrowth = openingValue + 0.5 * totalNetChange;
         } else {
-          // Opening balance (default): opening + lifecycle outflows only (inflows added after growth)
-          balanceForGrowth = openingValue + Math.min(0, lifecycleChange) + userTransferChange;
+          // Opening balance (default): opening + all outflows (inflows added after growth)
+          balanceForGrowth = openingValue + Math.min(0, lifecycleChange) + userTransferChange + eventNetChange + fundedByChange;
         }
         
         // PHASE 4: Apply growth (only if balance > 0)
@@ -816,17 +881,18 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           growth = 0;
         }
         
-        // Add remaining transfer amounts not included in growth base
+        // Add remaining net flows not included in growth base
         if (settings.growthCalculationMethod === 'averageBalance') {
-          // For average balance, the full transfer is already factored in via 0.5 multiplier
+          // For average balance, the full net flow is already factored in via 0.5 multiplier
           // Add the other half that wasn't in the growth base
-          projectedValue += 0.5 * totalTransfers;
+          projectedValue += 0.5 * totalNetChange;
         } else {
           // For opening balance method, add lifecycle inflows and super contributions after growth
+          // (events are already in totalNetChange and thus balanceForGrowth)
           projectedValue += lifecycleContribution + superContributionChange;
         }
 
-        // Process non-transfer events (contributions/withdrawals) - don't add to contributions again
+        // Track event cashflows for reporting (endValue already includes them via totalNetChange)
         let eventContributions = 0;
         let eventWithdrawals = 0;
         for (const event of yearEvents) {
@@ -843,10 +909,25 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         contributions += eventContributions;
         withdrawals += eventWithdrawals;
 
-        // Set endValue (unless liability was paid off via asset sale)
+        // Track fundedBy outflows for reporting (endValue already includes them via totalNetChange)
+        const fundedByList = fundedByDetails.get(account.id);
+        if (fundedByList) {
+          for (const fundedBy of fundedByList) {
+            details.push({
+              description: `Fund asset: ${fundedBy.accountName}`,
+              amount: fundedBy.amount,
+              type: 'withdrawal',
+              sourceAccountId: fundedBy.accountId,
+              sourceAccountName: fundedBy.accountName,
+            });
+            withdrawals += fundedBy.amount;
+          }
+        }
+
+        // Set endValue (events and fundedBy already included via totalNetChange; don't double-count)
         const wasLiabilityPaidOff = account.type === 'liability' && liabilityPayoffs.has(account.id);
         if (!wasLiabilityPaidOff) {
-          endValue = projectedValue + eventContributions - eventWithdrawals;
+          endValue = projectedValue;
         }
 
         // PHASE 5: Derived flows
@@ -951,14 +1032,14 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             sourceAccountName: account.name,
           });
         }
-        if (account.type === 'asset' && account.incomeTargetAccountId && balanceForGrowth > 0) {
+        if (account.type === 'asset' && account.incomeTargetAccountId) {
           const epochReturnOverride = getAccountAssumptionForEpoch(account, year, sortedEpochs, 'returnRate');
           const effectiveReturnRate = epochReturnOverride ?? account.returnRate;
           if (effectiveReturnRate) {
             // Determine balance for return calculation based on returnBalanceMethod (default: average)
             const balanceMethod = account.returnBalanceMethod ?? 'average';
             let balanceForReturn: number;
-            
+
             switch (balanceMethod) {
               case 'opening':
                 balanceForReturn = openingValue;
@@ -971,7 +1052,12 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
                 balanceForReturn = (openingValue + endValue) / 2;
                 break;
             }
-            
+
+            if (balanceForReturn <= 0) {
+              // No return on zero or negative balance
+              continue;
+            }
+
             const cashReturn = balanceForReturn * effectiveReturnRate;
             
             // Calculate franking credits if franking percentage is set
@@ -1008,6 +1094,18 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
               sourceAccountId: account.id,
               sourceAccountName: account.name,
             });
+
+            // Defensive: old data may have incomeTargetAccountId pointing to an asset.
+            // Emit a warning so the user knows to reconfigure the account.
+            const targetIncome = accounts.find((a) => a.id === account.incomeTargetAccountId);
+            if (targetIncome && targetIncome.type !== 'income') {
+              yearWarnings.push({
+                type: 'other',
+                severity: 'warning',
+                message: `${account.name} targets ${targetIncome.name} (a ${targetIncome.type} account) for returns. Reconfigure it to target an income account.`,
+                accountId: account.id,
+              });
+            }
           }
         }
         if (account.type === 'asset' && account.fundedByAccountId) {
@@ -1021,8 +1119,10 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             fundingAmount += account.initialValue;
           }
           if (fundingAmount > 0) {
-            // Bank funds the asset purchase — internal transfer (asset credit is implicit in account processing)
-            deferredLedgerEntries.push({
+            // The funding account's balance was already reduced in Phase 3b so it is
+            // included in growth/return calculations. We still record a ledger entry
+            // so the conservation check can verify the flow.
+            yearLedgerEntries.push({
               accountId: account.fundedByAccountId,
               amount: fundingAmount,
               delta: 'debit',
@@ -1894,48 +1994,89 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         minRate = drawdownRates['95plus'];
       }
       
-      const minimumDrawdown = result.endValue * minRate;
-      
-      // Check if actual withdrawals meet minimum (from cashflowDetails - source of truth)
+      // Apply drawdown scale if configured (defaults to 1.0 = minimum required)
+      const drawdownScale = account.drawdownScale ?? 1.0;
+      const requiredDrawdown = result.endValue * minRate * drawdownScale;
+
+      // Check if actual withdrawals meet the required drawdown (from cashflowDetails - source of truth)
       const actualWithdrawals = result.cashflowDetails
         ?.filter(d => d.type === 'withdrawal')
         .reduce((sum, d) => sum + d.amount, 0) ?? 0;
-      
-      if (actualWithdrawals < minimumDrawdown) {
-        const shortfall = minimumDrawdown - actualWithdrawals;
-        
+
+      if (actualWithdrawals < requiredDrawdown) {
+        const shortfall = requiredDrawdown - actualWithdrawals;
+
         // Cap shortfall at available balance to prevent negative balance
         const actualShortfall = Math.min(shortfall, result.endValue);
-        
-        // Force additional withdrawal to meet minimum (capped to prevent negative)
-        result.endValue -= actualShortfall;
-        accountValues.set(account.id, result.endValue);
-        
-        if (!result.cashflowDetails) result.cashflowDetails = [];
-        result.cashflowDetails.push({
-          description: `Minimum pension drawdown (age ${age}, ${minRate * 100}%)`,
-          amount: actualShortfall,
-          type: 'withdrawal',
-        });
 
-        // Deposit to income target account if configured
-        if (account.incomeTargetAccountId) {
-          const targetResult = accountResults.get(account.incomeTargetAccountId);
-          if (targetResult) {
-            targetResult.endValue += actualShortfall;
-            accountValues.set(account.incomeTargetAccountId, targetResult.endValue);
+        // Determine the drawdown target account (drawdownTargetAccountId falls back to incomeTargetAccountId)
+        const drawdownTargetId = account.drawdownTargetAccountId ?? account.incomeTargetAccountId;
 
-            if (!targetResult.cashflowDetails) targetResult.cashflowDetails = [];
-            targetResult.cashflowDetails.push({
-              description: `Minimum pension drawdown from: ${account.name}`,
+        // Emit both sides of the drawdown as ledger entries so the forwarding pass
+        // can route the credit to the bank if the target is an income account.
+        emitLedgerEntry(
+          {
+            accountId: account.id,
+            amount: actualShortfall,
+            delta: 'debit',
+            kind: drawdownTargetId ? 'internalTransfer' : 'externalOut',
+            label: `Pension drawdown (age ${age}, ${(minRate * drawdownScale * 100).toFixed(1)}%)`,
+            sourceAccountId: account.id,
+            sourceAccountName: account.name,
+          },
+          yearLedgerEntries,
+          accountResults,
+          accountValues,
+          ledgerError,
+        );
+
+        if (drawdownTargetId) {
+          emitLedgerEntry(
+            {
+              accountId: drawdownTargetId,
               amount: actualShortfall,
-              type: 'contribution',
+              delta: 'credit',
+              kind: 'internalTransfer',
+              label: `Pension drawdown from: ${account.name}`,
               sourceAccountId: account.id,
               sourceAccountName: account.name,
-            });
-          }
+            },
+            yearLedgerEntries,
+            accountResults,
+            accountValues,
+            ledgerError,
+          );
         }
       }
+    }
+
+    // ===========================================
+    // PHASE 8b: Forward income-account credits to their depositsToAccountId
+    // Any credit to an income account (returns, drawdowns, etc.) arrives after
+    // the income account's own deposit logic has already run. We need a second
+    // pass to route that money to the bank/asset the user configured.
+    // ===========================================
+
+    const entriesToForward: typeof deferredLedgerEntries = [];
+    for (const entry of yearLedgerEntries) {
+      if (entry.delta !== 'credit') continue;
+      const targetAccount = accounts.find((a) => a.id === entry.accountId);
+      if (!targetAccount || targetAccount.type !== 'income') continue;
+      if (!targetAccount.depositsToAccountId) continue;
+
+      entriesToForward.push({
+        accountId: targetAccount.depositsToAccountId,
+        amount: entry.amount,
+        delta: 'credit',
+        kind: 'externalIn',
+        label: `Via ${targetAccount.name}: ${entry.label}`,
+        sourceAccountId: entry.sourceAccountId,
+        sourceAccountName: entry.sourceAccountName,
+      });
+    }
+
+    for (const entry of entriesToForward) {
+      emitLedgerEntry(entry, yearLedgerEntries, accountResults, accountValues, ledgerError);
     }
 
     // ===========================================
