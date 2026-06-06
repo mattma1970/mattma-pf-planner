@@ -3349,7 +3349,7 @@ describe('calculateForecast', () => {
         // Pension grows 5% then drawdown is debited
         const pensionAfterGrowth = 200_000 * 1.05;
         expect(pensionResult.endValue).toBeCloseTo(pensionAfterGrowth - 30_000, 0);
-        expect(pensionResult.withdrawals).toBe(30_000);
+        expect(pensionResult.transfers).toBe(-30_000);
 
         // Cash receives the drawdown
         expect(cashResult.endValue).toBeCloseTo(10_000 + 30_000, 0);
@@ -3484,7 +3484,7 @@ describe('calculateForecast', () => {
         expect(fundResult.endValue).toBe(20_000);
         expect(fundResult.contributions).toBe(20_000);
         expect(bankResult.endValue).toBe(80_000);
-        expect(bankResult.withdrawals).toBe(20_000);
+        expect(bankResult.transfers).toBe(-20_000);
 
         // Transfer is balanced — no conservation violation
         const violations = year.warnings?.filter(w => w.type === 'conservationViolation') ?? [];
