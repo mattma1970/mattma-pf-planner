@@ -97,6 +97,26 @@ describe('ledger', () => {
       expect(journal).toHaveLength(0);
     });
 
+    it('calls onError and leaves debit balance unchanged when credit account is missing', () => {
+      const bank = createTestAccount({ id: 'bank', name: 'Bank', type: 'asset', initialValue: 1000, growthProfile: { type: 'fixed', rate: 0 } });
+      const results = new Map([['bank', makeResult('bank', 1000)]]);
+      const values = new Map([['bank', 1000]]);
+      const journal: JournalEntry[] = [];
+      const onError = vi.fn();
+
+      emitJournalEntry(
+        { debitAccountId: 'bank', creditAccountId: 'ghost-credit', amount: 200, label: 'orphan flow', kind: 'internalTransfer' },
+        journal, results, values, [bank], 2025, 'system', onError,
+      );
+
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onError.mock.calls[0][0]).toContain('ghost-credit');
+      expect(journal).toHaveLength(0);
+      // Debit balance must be untouched — no half-transfer
+      expect(results.get('bank')!.endValue).toBe(1000);
+      expect(results.get('bank')!.transfers).toBe(0);
+    });
+
     it('does not call onError when no callback is provided and account is missing', () => {
       const results = new Map<string, AccountYearResult>();
       const values = new Map<string, number>();
