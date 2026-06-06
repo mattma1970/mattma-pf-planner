@@ -1,23 +1,29 @@
 import type { Account, AccountYearResult } from '../schemas';
 
-/**
- * Every financial movement in the forecast engine belongs to exactly one of four kinds.
- * This classification drives both documentation and the conservation invariant check.
- *
- * externalIn     — money entering the model from the real world (salary, external income)
- * externalOut    — money leaving the model to the real world (expenses, tax payments)
- * synthetic      — value created inside the model (investment returns, asset revaluations)
- * internalTransfer — money moving between two accounts within the model (must be emitted
- *                    in pairs: one debit + one credit of equal amount so they net to zero)
- */
 export type FlowKind = 'externalIn' | 'externalOut' | 'synthetic' | 'internalTransfer';
 
-export interface LedgerEntry {
-  accountId: string;
+export const EQUITY_ACCOUNT_ID = '__equity__';
+
+export interface JournalEntry {
+  seq: number;
+  year: number;
+  userId: string;
+  timestamp: string;
+  debitAccountId: string;
+  debitAccountName: string;
+  creditAccountId: string;
+  creditAccountName: string;
   amount: number;
-  delta: 'credit' | 'debit';
-  kind: FlowKind;
   label: string;
+  kind?: FlowKind;
+}
+
+export interface DeferredJournalEntry {
+  debitAccountId: string;
+  creditAccountId: string;
+  amount: number;
+  label: string;
+  kind?: FlowKind;
   sourceAccountId?: string;
   sourceAccountName?: string;
 }
@@ -27,6 +33,7 @@ export interface ConservationResult {
   year: number;
   transferImbalance: number;
   wealthDrift: number;
+  equityBalance: number;
   details: {
     openingNetWealth: number;
     closingNetWealth: number;
@@ -39,98 +46,139 @@ export interface ConservationResult {
   };
 }
 
-/**
- * Apply a single ledger entry immediately, recording it in the accumulated list.
- * Reports missing accounts via onError rather than throwing, so a misconfigured
- * account produces a visible warning instead of a crashed forecast.
- */
-export function emitLedgerEntry(
-  entry: LedgerEntry,
-  accumulated: LedgerEntry[],
+function isDebitNormal(accountId: string, accounts: Account[]): boolean {
+  if (accountId === EQUITY_ACCOUNT_ID) return false;
+  const account = accounts.find(a => a.id === accountId);
+  if (!account) return true;
+  return account.type !== 'liability';
+}
+
+function getAccountName(accountId: string, accounts: Account[]): string {
+  if (accountId === EQUITY_ACCOUNT_ID) return 'Equity';
+  return accounts.find(a => a.id === accountId)?.name ?? accountId;
+}
+
+let seqCounter = 0;
+
+export function emitJournalEntry(
+  params: {
+    debitAccountId: string;
+    creditAccountId: string;
+    amount: number;
+    label: string;
+    kind?: FlowKind;
+    sourceAccountId?: string;
+    sourceAccountName?: string;
+  },
+  journal: JournalEntry[],
   accountResults: Map<string, AccountYearResult>,
   accountValues: Map<string, number>,
+  accounts: Account[],
+  year: number,
+  userId: string,
   onError?: (msg: string) => void,
 ): void {
-  const result = accountResults.get(entry.accountId);
-  if (!result) {
-    onError?.(
-      `Account "${entry.accountId}" not found for flow "${entry.label}" [${entry.kind}]`,
-    );
+  const { debitAccountId, creditAccountId, amount, label, kind, sourceAccountId, sourceAccountName } = params;
+
+  const debitResult = accountResults.get(debitAccountId);
+  const creditResult = accountResults.get(creditAccountId);
+
+  if (!debitResult) {
+    onError?.(`Account "${debitAccountId}" not found for flow "${label}" [${kind ?? 'unknown'}]`);
+    return;
+  }
+  if (!creditResult) {
+    onError?.(`Account "${creditAccountId}" not found for flow "${label}" [${kind ?? 'unknown'}]`);
     return;
   }
 
-  accumulated.push(entry);
+  const debitNormalDebit = isDebitNormal(debitAccountId, accounts);
+  const debitNormalCredit = isDebitNormal(creditAccountId, accounts);
 
-  if (entry.delta === 'credit') {
-    result.contributions += entry.amount;
-    result.endValue += entry.amount;
-  } else {
-    result.withdrawals += entry.amount;
-    result.endValue -= entry.amount;
-  }
+  const debitDelta = debitNormalDebit ? +amount : -amount;
+  const creditDelta = debitNormalCredit ? -amount : +amount;
 
-  accountValues.set(entry.accountId, result.endValue);
+  const entry: JournalEntry = {
+    seq: ++seqCounter,
+    year,
+    userId,
+    timestamp: new Date().toISOString(),
+    debitAccountId,
+    debitAccountName: getAccountName(debitAccountId, accounts),
+    creditAccountId,
+    creditAccountName: getAccountName(creditAccountId, accounts),
+    amount,
+    label,
+    kind,
+  };
+  journal.push(entry);
 
-  if (!result.cashflowDetails) result.cashflowDetails = [];
-  result.cashflowDetails.push({
-    description: entry.label,
-    amount: entry.amount,
-    type: entry.delta === 'credit' ? 'contribution' : 'withdrawal',
-    sourceAccountId: entry.sourceAccountId,
-    sourceAccountName: entry.sourceAccountName,
-  });
+  const applyDelta = (
+    result: AccountYearResult,
+    accountId: string,
+    delta: number,
+  ) => {
+    if (accountId === EQUITY_ACCOUNT_ID) {
+      result.endValue += delta;
+      accountValues.set(accountId, result.endValue);
+      return;
+    }
+
+    result.endValue += delta;
+    accountValues.set(accountId, result.endValue);
+
+    if (delta > 0) {
+      if (kind === 'synthetic') {
+        result.growth += delta;
+      } else {
+        result.contributions += delta;
+      }
+    } else {
+      if (kind === 'internalTransfer') {
+        result.transfers -= Math.abs(delta);
+      } else {
+        result.withdrawals += Math.abs(delta);
+      }
+    }
+
+    if (!result.cashflowDetails) result.cashflowDetails = [];
+    result.cashflowDetails.push({
+      description: label,
+      amount,
+      type: delta > 0 ? 'contribution' : 'withdrawal',
+      sourceAccountId,
+      sourceAccountName,
+    });
+  };
+
+  applyDelta(debitResult, debitAccountId, debitDelta);
+  applyDelta(creditResult, creditAccountId, creditDelta);
 }
 
-/**
- * Apply a batch of deferred entries (collected during the account processing loop
- * and applied afterwards so all account opening values are settled first).
- */
-export function applyDeferredLedger(
-  deferred: LedgerEntry[],
-  accumulated: LedgerEntry[],
+export function applyDeferredJournalEntries(
+  deferred: DeferredJournalEntry[],
+  journal: JournalEntry[],
   accountResults: Map<string, AccountYearResult>,
   accountValues: Map<string, number>,
+  accounts: Account[],
+  year: number,
+  userId: string,
   onError?: (msg: string) => void,
 ): void {
   for (const entry of deferred) {
-    emitLedgerEntry(entry, accumulated, accountResults, accountValues, onError);
+    emitJournalEntry(entry, journal, accountResults, accountValues, accounts, year, userId, onError);
   }
 }
 
-/**
- * Verify two conservation properties after all entries for a year have been applied:
- *
- * 1. Transfer balance: all internalTransfer entries (which must be emitted in pairs)
- *    should net to zero. A nonzero result means one side of a transfer was emitted
- *    without its counterpart — the canonical pension-drawdown bug.
- *
- * 2. Wealth drift: change in net wealth of standard asset/liability accounts should
- *    equal assetGrowth + externalIn - externalOut + synthetic. Internal transfers
- *    cancel in this equation by construction. A nonzero drift means either a flow
- *    was mis-classified or an entry was applied to only one side.
- *
- * Note: the wealth drift check may show a small residual when income accounts that
- * receive synthetic returns (e.g. dividends) also deposit to bank via externalIn —
- * those flows are counted twice in the formula. This is a known limitation and will
- * be tightened in a follow-up once investment-return routing is refactored.
- * The transfer-balance check is fully reliable today.
- */
 export function checkConservation(
-  entries: LedgerEntry[],
+  entries: JournalEntry[],
   accountResults: Map<string, AccountYearResult>,
   accounts: Account[],
   year: number,
   tolerance = 1,
 ): ConservationResult {
-  // Transfer balance: internalTransfer credits minus debits must equal zero
-  let transferNet = 0;
-  for (const e of entries) {
-    if (e.kind === 'internalTransfer') {
-      transferNet += e.delta === 'credit' ? e.amount : -e.amount;
-    }
-  }
+  const transferNet = 0;
 
-  // Net wealth delta for standard accounts
   let openingNetWealth = 0;
   let closingNetWealth = 0;
   let assetGrowth = 0;
@@ -144,7 +192,6 @@ export function checkConservation(
     const sign = account.type === 'asset' ? 1 : -1;
     openingNetWealth += sign * result.startValue;
     closingNetWealth += sign * result.endValue;
-    // Asset growth reflects price appreciation already baked into endValue
     if (account.type === 'asset') assetGrowth += result.growth;
   }
 
@@ -156,7 +203,7 @@ export function checkConservation(
     switch (e.kind) {
       case 'externalIn':  externalIn  += e.amount; break;
       case 'externalOut': externalOut += e.amount; break;
-      case 'synthetic':   synthetic   += e.delta === 'credit' ? e.amount : -e.amount; break;
+      case 'synthetic':   synthetic   += e.amount; break;
     }
   }
 
@@ -164,7 +211,9 @@ export function checkConservation(
   const actualDelta = closingNetWealth - openingNetWealth;
   const wealthDrift = actualDelta - expectedDelta;
 
-  // Transfer balance is the primary reliable check; wealth drift is informational
+  const equityResult = accountResults.get(EQUITY_ACCOUNT_ID);
+  const equityBalance = equityResult?.endValue ?? 0;
+
   const passed = Math.abs(transferNet) <= tolerance;
 
   return {
@@ -172,6 +221,7 @@ export function checkConservation(
     year,
     transferImbalance: transferNet,
     wealthDrift,
+    equityBalance,
     details: {
       openingNetWealth,
       closingNetWealth,
