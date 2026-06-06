@@ -628,9 +628,9 @@ describe('calculateForecast', () => {
       
       expect(bank2025.endValue).toBe(0);
       expect(bank2025.contributions).toBe(40000);
-      
+
       expect(pension2025.endValue).toBe(460000);
-      expect(pension2025.withdrawals).toBe(40000);
+      expect(pension2025.transfers).toBe(-40000);
     });
 
     it('tops up to target balance when specified', () => {
@@ -813,7 +813,7 @@ describe('calculateForecast', () => {
       const mortResult = result.years[0].accounts.find(a => a.accountId === mortgage.id)!;
       
       expect(mortResult.growth).toBe(5000);
-      expect(mortResult.withdrawals).toBe(20000);
+      expect(mortResult.transfers).toBe(-20000);
       expect(mortResult.endValue).toBe(80000);
     });
 
@@ -908,10 +908,10 @@ describe('calculateForecast', () => {
       const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
       
       expect(mortResult.growth).toBe(6000);
-      
-      const expectedPayment = 100000 + 6000;
-      expect(bankResult.withdrawals).toBe(expectedPayment);
-      
+
+      expect(bankResult.withdrawals).toBe(6000);
+      expect(bankResult.transfers).toBe(-100000);
+
       expect(mortResult.endValue).toBe(200000);
     });
 
@@ -951,10 +951,11 @@ describe('calculateForecast', () => {
       const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
       
       expect(mortResult.growth).toBe(5000);
-      expect(mortResult.withdrawals).toBe(25000);
-      
-      expect(bankResult.withdrawals).toBe(30000);
-      
+      expect(mortResult.transfers).toBe(-25000);
+
+      expect(bankResult.withdrawals).toBe(5000);
+      expect(bankResult.transfers).toBe(-25000);
+
       expect(mortResult.endValue).toBe(75000);
       expect(bankResult.endValue).toBe(170000);
     });
