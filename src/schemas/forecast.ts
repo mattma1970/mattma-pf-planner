@@ -6,6 +6,23 @@ export const ResolvedAssumptionsSchema = z.object({
 });
 export type ResolvedAssumptions = z.infer<typeof ResolvedAssumptionsSchema>;
 
+export const JournalEntrySchema = z.object({
+  seq: z.number().int(),
+  year: z.number().int(),
+  userId: z.string(),
+  timestamp: z.string(),
+  debitAccountId: z.string(),
+  debitAccountName: z.string(),
+  creditAccountId: z.string(),
+  creditAccountName: z.string(),
+  amount: z.number(),
+  label: z.string(),
+  kind: z.enum(['externalIn', 'externalOut', 'synthetic', 'internalTransfer']).optional(),
+  sourceAccountId: z.string().optional(),
+  sourceAccountName: z.string().optional(),
+});
+export type JournalEntry = z.infer<typeof JournalEntrySchema>;
+
 export const ForecastWarningSchema = z.object({
   type: z.enum(['blockedContribution', 'capExceeded', 'negativeBalance', 'incompleteEmployerSg', 'unroutedIncome', 'ledgerError', 'conservationViolation', 'other']),
   severity: z.enum(['info', 'warning', 'error']),
@@ -39,6 +56,7 @@ export const CashflowItemSchema = z.object({
   description: z.string(),
   amount: z.number(),
   type: z.enum(['contribution', 'withdrawal']),
+  kind: z.enum(['externalIn', 'externalOut', 'synthetic', 'internalTransfer']).optional(),
   sourceAccountId: z.string().optional(),
   sourceAccountName: z.string().optional(),
 });
@@ -74,6 +92,7 @@ export const YearResultSchema = z.object({
   resolvedAssumptions: ResolvedAssumptionsSchema,
   offBalanceSheet: z.array(OffBalanceSheetItemSchema).optional(),
   warnings: z.array(ForecastWarningSchema).optional(),
+  journal: z.array(JournalEntrySchema).optional(),
   conservationLog: z.string().optional(),
 });
 export type YearResult = z.infer<typeof YearResultSchema>;

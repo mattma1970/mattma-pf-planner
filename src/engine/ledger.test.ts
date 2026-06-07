@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { emitLedgerEntry, applyDeferredLedger, checkConservation, type LedgerEntry } from './ledger';
+import { emitJournalEntry, applyDeferredJournalEntries, checkConservation, EQUITY_ACCOUNT_ID, type JournalEntry, type DeferredJournalEntry } from './ledger';
 import type { AccountYearResult } from '../schemas';
 import { createTestAccount } from '../test/fixtures';
 
@@ -16,32 +16,44 @@ function makeResult(accountId: string, startValue: number, endValue = startValue
   };
 }
 
-describe('ledger', () => {
-  describe('emitLedgerEntry', () => {
-    it('credits the target account and records contribution', () => {
-      const results = new Map([['acc-1', makeResult('acc-1', 100)]]);
-      const values = new Map([['acc-1', 100]]);
-      const accumulated: LedgerEntry[] = [];
+function makeEquityResult(): AccountYearResult {
+  return makeResult(EQUITY_ACCOUNT_ID, 0);
+}
 
-      emitLedgerEntry(
-        { accountId: 'acc-1', amount: 50, delta: 'credit', kind: 'externalIn', label: 'salary' },
-        accumulated, results, values,
+describe('ledger', () => {
+  describe('emitJournalEntry', () => {
+    it('credits the target account and records contribution (externalIn)', () => {
+      const bank = createTestAccount({ id: 'acc-1', name: 'Bank', type: 'asset', initialValue: 100, growthProfile: { type: 'fixed', rate: 0 } });
+      const results = new Map([
+        ['acc-1', makeResult('acc-1', 100)],
+        [EQUITY_ACCOUNT_ID, makeEquityResult()],
+      ]);
+      const values = new Map([['acc-1', 100], [EQUITY_ACCOUNT_ID, 0]]);
+      const journal: JournalEntry[] = [];
+
+      emitJournalEntry(
+        { debitAccountId: 'acc-1', creditAccountId: EQUITY_ACCOUNT_ID, amount: 50, label: 'salary', kind: 'externalIn' },
+        journal, results, values, [bank], 2025, 'system',
       );
 
       expect(results.get('acc-1')!.endValue).toBe(150);
       expect(results.get('acc-1')!.contributions).toBe(50);
       expect(values.get('acc-1')).toBe(150);
-      expect(accumulated).toHaveLength(1);
+      expect(journal).toHaveLength(1);
     });
 
-    it('debits the target account and records withdrawal', () => {
-      const results = new Map([['acc-1', makeResult('acc-1', 100)]]);
-      const values = new Map([['acc-1', 100]]);
-      const accumulated: LedgerEntry[] = [];
+    it('debits the target account and records withdrawal (externalOut)', () => {
+      const bank = createTestAccount({ id: 'acc-1', name: 'Bank', type: 'asset', initialValue: 100, growthProfile: { type: 'fixed', rate: 0 } });
+      const results = new Map([
+        ['acc-1', makeResult('acc-1', 100)],
+        [EQUITY_ACCOUNT_ID, makeEquityResult()],
+      ]);
+      const values = new Map([['acc-1', 100], [EQUITY_ACCOUNT_ID, 0]]);
+      const journal: JournalEntry[] = [];
 
-      emitLedgerEntry(
-        { accountId: 'acc-1', amount: 30, delta: 'debit', kind: 'externalOut', label: 'expense' },
-        accumulated, results, values,
+      emitJournalEntry(
+        { debitAccountId: EQUITY_ACCOUNT_ID, creditAccountId: 'acc-1', amount: 30, label: 'expense', kind: 'externalOut' },
+        journal, results, values, [bank], 2025, 'system',
       );
 
       expect(results.get('acc-1')!.endValue).toBe(70);
@@ -49,12 +61,16 @@ describe('ledger', () => {
     });
 
     it('appends a cashflowDetail on the account result', () => {
-      const results = new Map([['acc-1', makeResult('acc-1', 100)]]);
-      const values = new Map([['acc-1', 100]]);
+      const bank = createTestAccount({ id: 'acc-1', name: 'Bank', type: 'asset', initialValue: 100, growthProfile: { type: 'fixed', rate: 0 } });
+      const results = new Map([
+        ['acc-1', makeResult('acc-1', 100)],
+        [EQUITY_ACCOUNT_ID, makeEquityResult()],
+      ]);
+      const values = new Map([['acc-1', 100], [EQUITY_ACCOUNT_ID, 0]]);
 
-      emitLedgerEntry(
-        { accountId: 'acc-1', amount: 25, delta: 'credit', kind: 'synthetic', label: 'dividend', sourceAccountId: 'src-1', sourceAccountName: 'Shares' },
-        [], results, values,
+      emitJournalEntry(
+        { debitAccountId: 'acc-1', creditAccountId: EQUITY_ACCOUNT_ID, amount: 25, label: 'dividend', kind: 'synthetic', sourceAccountId: 'src-1', sourceAccountName: 'Shares' },
+        [], results, values, [bank], 2025, 'system',
       );
 
       const details = results.get('acc-1')!.cashflowDetails!;
@@ -65,71 +81,97 @@ describe('ledger', () => {
       expect(details[0].sourceAccountId).toBe('src-1');
     });
 
-    it('calls onError and does NOT append entry when account is missing', () => {
-      const results = new Map<string, AccountYearResult>();
-      const values = new Map<string, number>();
-      const accumulated: LedgerEntry[] = [];
+    it('calls onError and does NOT append entry when debit account is missing', () => {
+      const results = new Map([[EQUITY_ACCOUNT_ID, makeEquityResult()]]);
+      const values = new Map([[EQUITY_ACCOUNT_ID, 0]]);
+      const journal: JournalEntry[] = [];
       const onError = vi.fn();
 
-      emitLedgerEntry(
-        { accountId: 'ghost-id', amount: 50, delta: 'credit', kind: 'externalIn', label: 'orphan flow' },
-        accumulated, results, values, onError,
+      emitJournalEntry(
+        { debitAccountId: 'ghost-id', creditAccountId: EQUITY_ACCOUNT_ID, amount: 50, label: 'orphan flow', kind: 'externalIn' },
+        journal, results, values, [], 2025, 'system', onError,
       );
 
       expect(onError).toHaveBeenCalledOnce();
       expect(onError.mock.calls[0][0]).toContain('ghost-id');
-      expect(accumulated).toHaveLength(0);
+      expect(journal).toHaveLength(0);
+    });
+
+    it('calls onError and leaves debit balance unchanged when credit account is missing', () => {
+      const bank = createTestAccount({ id: 'bank', name: 'Bank', type: 'asset', initialValue: 1000, growthProfile: { type: 'fixed', rate: 0 } });
+      const results = new Map([['bank', makeResult('bank', 1000)]]);
+      const values = new Map([['bank', 1000]]);
+      const journal: JournalEntry[] = [];
+      const onError = vi.fn();
+
+      emitJournalEntry(
+        { debitAccountId: 'bank', creditAccountId: 'ghost-credit', amount: 200, label: 'orphan flow', kind: 'internalTransfer' },
+        journal, results, values, [bank], 2025, 'system', onError,
+      );
+
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onError.mock.calls[0][0]).toContain('ghost-credit');
+      expect(journal).toHaveLength(0);
+      // Debit balance must be untouched — no half-transfer
+      expect(results.get('bank')!.endValue).toBe(1000);
+      expect(results.get('bank')!.transfers).toBe(0);
     });
 
     it('does not call onError when no callback is provided and account is missing', () => {
       const results = new Map<string, AccountYearResult>();
       const values = new Map<string, number>();
-      // Should not throw
       expect(() =>
-        emitLedgerEntry(
-          { accountId: 'ghost-id', amount: 50, delta: 'credit', kind: 'externalIn', label: 'test' },
-          [], results, values,
+        emitJournalEntry(
+          { debitAccountId: 'ghost-id', creditAccountId: EQUITY_ACCOUNT_ID, amount: 50, label: 'test', kind: 'externalIn' },
+          [], results, values, [], 2025, 'system',
         )
       ).not.toThrow();
     });
   });
 
-  describe('applyDeferredLedger', () => {
+  describe('applyDeferredJournalEntries', () => {
     it('applies all deferred entries in order and accumulates them', () => {
+      const bank = createTestAccount({ id: 'bank', name: 'Bank', type: 'asset', initialValue: 1000, growthProfile: { type: 'fixed', rate: 0 } });
+      const superAcc = createTestAccount({ id: 'super', name: 'Super', type: 'asset', initialValue: 500, growthProfile: { type: 'fixed', rate: 0 } });
       const results = new Map([
         ['bank', makeResult('bank', 1000)],
         ['super', makeResult('super', 500)],
+        [EQUITY_ACCOUNT_ID, makeEquityResult()],
       ]);
-      const values = new Map([['bank', 1000], ['super', 500]]);
-      const accumulated: LedgerEntry[] = [];
-      const deferred: LedgerEntry[] = [
-        { accountId: 'bank', amount: 200, delta: 'credit', kind: 'externalIn', label: 'salary' },
-        { accountId: 'bank', amount: 50,  delta: 'debit',  kind: 'externalOut', label: 'expense' },
-        { accountId: 'super', amount: 100, delta: 'credit', kind: 'externalIn', label: 'employer SG' },
+      const values = new Map([['bank', 1000], ['super', 500], [EQUITY_ACCOUNT_ID, 0]]);
+      const journal: JournalEntry[] = [];
+      const deferred: DeferredJournalEntry[] = [
+        { debitAccountId: 'bank', creditAccountId: EQUITY_ACCOUNT_ID, amount: 200, label: 'salary', kind: 'externalIn' },
+        { debitAccountId: EQUITY_ACCOUNT_ID, creditAccountId: 'bank', amount: 50, label: 'expense', kind: 'externalOut' },
+        { debitAccountId: 'super', creditAccountId: EQUITY_ACCOUNT_ID, amount: 100, label: 'employer SG', kind: 'externalIn' },
       ];
 
-      applyDeferredLedger(deferred, accumulated, results, values);
+      applyDeferredJournalEntries(deferred, journal, results, values, [bank, superAcc], 2025, 'system');
 
-      expect(results.get('bank')!.endValue).toBe(1150);   // +200 −50
-      expect(results.get('super')!.endValue).toBe(600);    // +100
-      expect(accumulated).toHaveLength(3);
+      expect(results.get('bank')!.endValue).toBe(1150);
+      expect(results.get('super')!.endValue).toBe(600);
+      expect(journal).toHaveLength(3);
     });
 
     it('calls onError for missing accounts and continues applying the rest', () => {
-      const results = new Map([['bank', makeResult('bank', 1000)]]);
-      const values = new Map([['bank', 1000]]);
-      const accumulated: LedgerEntry[] = [];
+      const bank = createTestAccount({ id: 'bank', name: 'Bank', type: 'asset', initialValue: 1000, growthProfile: { type: 'fixed', rate: 0 } });
+      const results = new Map([
+        ['bank', makeResult('bank', 1000)],
+        [EQUITY_ACCOUNT_ID, makeEquityResult()],
+      ]);
+      const values = new Map([['bank', 1000], [EQUITY_ACCOUNT_ID, 0]]);
+      const journal: JournalEntry[] = [];
       const onError = vi.fn();
-      const deferred: LedgerEntry[] = [
-        { accountId: 'missing', amount: 50, delta: 'credit', kind: 'externalIn', label: 'bad flow' },
-        { accountId: 'bank',    amount: 200, delta: 'credit', kind: 'externalIn', label: 'salary' },
+      const deferred: DeferredJournalEntry[] = [
+        { debitAccountId: 'missing', creditAccountId: EQUITY_ACCOUNT_ID, amount: 50, label: 'bad flow', kind: 'externalIn' },
+        { debitAccountId: 'bank', creditAccountId: EQUITY_ACCOUNT_ID, amount: 200, label: 'salary', kind: 'externalIn' },
       ];
 
-      applyDeferredLedger(deferred, accumulated, results, values, onError);
+      applyDeferredJournalEntries(deferred, journal, results, values, [bank], 2025, 'system', onError);
 
       expect(onError).toHaveBeenCalledOnce();
-      expect(results.get('bank')!.endValue).toBe(1200); // good entry still applied
-      expect(accumulated).toHaveLength(1);              // only valid entry recorded
+      expect(results.get('bank')!.endValue).toBe(1200);
+      expect(journal).toHaveLength(1);
     });
   });
 
@@ -142,16 +184,20 @@ describe('ledger', () => {
 
     it('passes when internalTransfer entries are perfectly balanced', () => {
       const pension = createTestAccount({ id: 'pension', name: 'Pension', type: 'asset', initialValue: 200_000, growthProfile: { type: 'fixed', rate: 0 } });
-      const cash    = createTestAccount({ id: 'cash',    name: 'Cash',    type: 'asset', initialValue: 10_000,  growthProfile: { type: 'fixed', rate: 0 } });
+      const cash = createTestAccount({ id: 'cash', name: 'Cash', type: 'asset', initialValue: 10_000, growthProfile: { type: 'fixed', rate: 0 } });
 
       const results = new Map([
-        ['pension', makeResult('pension', 200_000, 170_000)], // debited 30k
-        ['cash',    makeResult('cash',    10_000,  40_000)],  // credited 30k
+        ['pension', makeResult('pension', 200_000, 170_000)],
+        ['cash', makeResult('cash', 10_000, 40_000)],
       ]);
 
-      const entries: LedgerEntry[] = [
-        { accountId: 'pension', amount: 30_000, delta: 'debit',  kind: 'internalTransfer', label: 'pension drawdown debit' },
-        { accountId: 'cash',    amount: 30_000, delta: 'credit', kind: 'internalTransfer', label: 'pension drawdown credit' },
+      const entries: JournalEntry[] = [
+        {
+          seq: 1, year: 2025, userId: 'system', timestamp: '',
+          debitAccountId: 'cash', debitAccountName: 'Cash',
+          creditAccountId: 'pension', creditAccountName: 'Pension',
+          amount: 30_000, label: 'pension drawdown', kind: 'internalTransfer',
+        },
       ];
 
       const result = checkConservation(entries, results, [pension, cash], 2025);
@@ -159,47 +205,65 @@ describe('ledger', () => {
       expect(result.transferImbalance).toBe(0);
     });
 
-    it('fails when an internalTransfer debit has no matching credit (the pension drawdown bug)', () => {
-      const pension = createTestAccount({ id: 'pension', name: 'Pension', type: 'asset', initialValue: 200_000, growthProfile: { type: 'fixed', rate: 0 } });
-      const results = new Map([['pension', makeResult('pension', 200_000, 200_000)]]);
+    it('reports equityBalance from equity account result', () => {
+      const bank = createTestAccount({ id: 'bank', name: 'Bank', type: 'asset', initialValue: 0, growthProfile: { type: 'fixed', rate: 0 } });
+      const results = new Map([
+        ['bank', makeResult('bank', 0, 120_000)],
+        [EQUITY_ACCOUNT_ID, { ...makeEquityResult(), endValue: 120_000 }],
+      ]);
 
-      // Only debit emitted — credit side (cash account) missing
-      const entries: LedgerEntry[] = [
-        { accountId: 'pension', amount: 30_000, delta: 'debit', kind: 'internalTransfer', label: 'orphaned debit' },
-      ];
-
-      const result = checkConservation(entries, results, [pension], 2025);
-      expect(result.passed).toBe(false);
-      expect(result.transferImbalance).toBe(-30_000);
-    });
-
-    it('fails when an internalTransfer credit has no matching debit', () => {
-      const cash = createTestAccount({ id: 'cash', name: 'Cash', type: 'asset', initialValue: 0, growthProfile: { type: 'fixed', rate: 0 } });
-      const results = new Map([['cash', makeResult('cash', 0, 30_000)]]);
-
-      // Only credit emitted — debit side missing (money created from nothing)
-      const entries: LedgerEntry[] = [
-        { accountId: 'cash', amount: 30_000, delta: 'credit', kind: 'internalTransfer', label: 'orphaned credit' },
-      ];
-
-      const result = checkConservation(entries, results, [cash], 2025);
-      expect(result.passed).toBe(false);
-      expect(result.transferImbalance).toBe(30_000);
-    });
-
-    it('does not count externalIn/externalOut/synthetic in the transfer balance', () => {
-      const bank = createTestAccount({ id: 'bank', name: 'Bank', type: 'asset', initialValue: 100, growthProfile: { type: 'fixed', rate: 0 } });
-      const results = new Map([['bank', makeResult('bank', 100, 180)]]);
-
-      const entries: LedgerEntry[] = [
-        { accountId: 'bank', amount: 200, delta: 'credit', kind: 'externalIn',  label: 'salary' },
-        { accountId: 'bank', amount: 50,  delta: 'debit',  kind: 'externalOut', label: 'tax' },
-        { accountId: 'bank', amount: 30,  delta: 'debit',  kind: 'synthetic',   label: 'revaluation down' },
+      const entries: JournalEntry[] = [
+        {
+          seq: 1, year: 2025, userId: 'system', timestamp: '',
+          debitAccountId: 'bank', debitAccountName: 'Bank',
+          creditAccountId: EQUITY_ACCOUNT_ID, creditAccountName: 'Equity',
+          amount: 120_000, label: 'salary', kind: 'externalIn',
+        },
       ];
 
       const result = checkConservation(entries, results, [bank], 2025);
       expect(result.passed).toBe(true);
-      expect(result.transferImbalance).toBe(0); // no internalTransfer entries
+      expect(result.equityBalance).toBe(120_000);
+    });
+
+    it('internalTransfer entries always have zero transfer imbalance in the two-sided system', () => {
+      const pension = createTestAccount({ id: 'pension', name: 'Pension', type: 'asset', initialValue: 200_000, growthProfile: { type: 'fixed', rate: 0 } });
+      const cash = createTestAccount({ id: 'cash', name: 'Cash', type: 'asset', initialValue: 10_000, growthProfile: { type: 'fixed', rate: 0 } });
+      const results = new Map([
+        ['pension', makeResult('pension', 200_000, 170_000)],
+        ['cash', makeResult('cash', 10_000, 40_000)],
+      ]);
+
+      const singleEntry: JournalEntry[] = [
+        {
+          seq: 1, year: 2025, userId: 'system', timestamp: '',
+          debitAccountId: 'cash', debitAccountName: 'Cash',
+          creditAccountId: 'pension', creditAccountName: 'Pension',
+          amount: 30_000, label: 'pension drawdown', kind: 'internalTransfer',
+        },
+      ];
+
+      const result = checkConservation(singleEntry, results, [pension, cash], 2025);
+      expect(result.passed).toBe(true);
+      expect(result.transferImbalance).toBe(0);
+    });
+
+    it('does not count externalIn/externalOut/synthetic in the transfer balance', () => {
+      const bank = createTestAccount({ id: 'bank', name: 'Bank', type: 'asset', initialValue: 100, growthProfile: { type: 'fixed', rate: 0 } });
+      const results = new Map([
+        ['bank', makeResult('bank', 100, 180)],
+        [EQUITY_ACCOUNT_ID, makeEquityResult()],
+      ]);
+
+      const entries: JournalEntry[] = [
+        { seq: 1, year: 2025, userId: 'system', timestamp: '', debitAccountId: 'bank', debitAccountName: 'Bank', creditAccountId: EQUITY_ACCOUNT_ID, creditAccountName: 'Equity', amount: 200, label: 'salary', kind: 'externalIn' },
+        { seq: 2, year: 2025, userId: 'system', timestamp: '', debitAccountId: EQUITY_ACCOUNT_ID, debitAccountName: 'Equity', creditAccountId: 'bank', creditAccountName: 'Bank', amount: 50, label: 'tax', kind: 'externalOut' },
+        { seq: 3, year: 2025, userId: 'system', timestamp: '', debitAccountId: 'bank', debitAccountName: 'Bank', creditAccountId: EQUITY_ACCOUNT_ID, creditAccountName: 'Equity', amount: 30, label: 'growth', kind: 'synthetic' },
+      ];
+
+      const result = checkConservation(entries, results, [bank], 2025);
+      expect(result.passed).toBe(true);
+      expect(result.transferImbalance).toBe(0);
     });
   });
 });

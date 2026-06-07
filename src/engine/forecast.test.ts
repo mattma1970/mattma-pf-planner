@@ -628,9 +628,9 @@ describe('calculateForecast', () => {
       
       expect(bank2025.endValue).toBe(0);
       expect(bank2025.contributions).toBe(40000);
-      
+
       expect(pension2025.endValue).toBe(460000);
-      expect(pension2025.withdrawals).toBe(40000);
+      expect(pension2025.transfers).toBe(-40000);
     });
 
     it('tops up to target balance when specified', () => {
@@ -813,7 +813,7 @@ describe('calculateForecast', () => {
       const mortResult = result.years[0].accounts.find(a => a.accountId === mortgage.id)!;
       
       expect(mortResult.growth).toBe(5000);
-      expect(mortResult.withdrawals).toBe(20000);
+      expect(mortResult.transfers).toBe(-20000);
       expect(mortResult.endValue).toBe(80000);
     });
 
@@ -908,10 +908,10 @@ describe('calculateForecast', () => {
       const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
       
       expect(mortResult.growth).toBe(6000);
-      
-      const expectedPayment = 100000 + 6000;
-      expect(bankResult.withdrawals).toBe(expectedPayment);
-      
+
+      expect(bankResult.withdrawals).toBe(6000);
+      expect(bankResult.transfers).toBe(-100000);
+
       expect(mortResult.endValue).toBe(200000);
     });
 
@@ -951,10 +951,11 @@ describe('calculateForecast', () => {
       const bankResult = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
       
       expect(mortResult.growth).toBe(5000);
-      expect(mortResult.withdrawals).toBe(25000);
-      
-      expect(bankResult.withdrawals).toBe(30000);
-      
+      expect(mortResult.transfers).toBe(-25000);
+
+      expect(bankResult.withdrawals).toBe(5000);
+      expect(bankResult.transfers).toBe(-25000);
+
       expect(mortResult.endValue).toBe(75000);
       expect(bankResult.endValue).toBe(170000);
     });
@@ -4053,7 +4054,7 @@ const result = calculateForecast({
         // Pension grows 5% then drawdown is debited
         const pensionAfterGrowth = 200_000 * 1.05;
         expect(pensionResult.endValue).toBeCloseTo(pensionAfterGrowth - 30_000, 0);
-        expect(pensionResult.withdrawals).toBe(30_000);
+        expect(pensionResult.transfers).toBe(-30_000);
 
         // Cash receives the drawdown
         expect(cashResult.endValue).toBeCloseTo(10_000 + 30_000, 0);
@@ -4188,7 +4189,7 @@ const result = calculateForecast({
         expect(fundResult.endValue).toBe(20_000);
         expect(fundResult.contributions).toBe(20_000);
         expect(bankResult.endValue).toBe(80_000);
-        expect(bankResult.withdrawals).toBe(20_000);
+        expect(bankResult.transfers).toBe(-20_000);
 
         // Transfer is balanced — no conservation violation
         const violations = year.warnings?.filter(w => w.type === 'conservationViolation') ?? [];
