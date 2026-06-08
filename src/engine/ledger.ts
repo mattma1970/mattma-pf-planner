@@ -1,6 +1,6 @@
 import type { Account, AccountYearResult } from '../schemas';
 
-export type FlowKind = 'externalIn' | 'externalOut' | 'synthetic' | 'internalTransfer';
+export type FlowKind = 'externalIn' | 'externalOut' | 'synthetic' | 'internalTransfer' | 'growth';
 
 export const EQUITY_ACCOUNT_ID = '__equity__';
 
@@ -133,21 +133,26 @@ export function emitJournalEntry(
     result.endValue += delta;
     accountValues.set(accountId, result.endValue);
 
-    if (delta > 0) {
+    if (kind === 'growth') {
+      result.growth += delta;
+    } else if (kind === 'internalTransfer') {
+      // For internal transfers, track flow direction: debit = inflow (+), credit = outflow (-)
+      if (accountId === debitAccountId) {
+        result.transfers += amount;
+      } else {
+        result.transfers -= amount;
+      }
+    } else if (delta > 0) {
       result.contributions += delta;
     } else {
-      if (kind === 'internalTransfer') {
-        result.transfers -= Math.abs(delta);
-      } else {
-        result.withdrawals += Math.abs(delta);
-      }
+      result.withdrawals += Math.abs(delta);
     }
 
     if (!result.cashflowDetails) result.cashflowDetails = [];
     result.cashflowDetails.push({
       description: label,
       amount,
-      type: delta > 0 ? 'contribution' : 'withdrawal',
+      type: kind === 'growth' ? 'growth' : kind === 'internalTransfer' ? 'transfer' : delta > 0 ? 'contribution' : 'withdrawal',
       kind,
       sourceAccountId,
       sourceAccountName,

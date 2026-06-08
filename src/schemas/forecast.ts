@@ -17,7 +17,7 @@ export const JournalEntrySchema = z.object({
   creditAccountName: z.string(),
   amount: z.number(),
   label: z.string(),
-  kind: z.enum(['externalIn', 'externalOut', 'synthetic', 'internalTransfer']).optional(),
+  kind: z.enum(['externalIn', 'externalOut', 'synthetic', 'internalTransfer', 'growth']).optional(),
   sourceAccountId: z.string().optional(),
   sourceAccountName: z.string().optional(),
 });
@@ -55,8 +55,8 @@ export type OffBalanceSheetItem = z.infer<typeof OffBalanceSheetItemSchema>;
 export const CashflowItemSchema = z.object({
   description: z.string(),
   amount: z.number(),
-  type: z.enum(['contribution', 'withdrawal']),
-  kind: z.enum(['externalIn', 'externalOut', 'synthetic', 'internalTransfer']).optional(),
+  type: z.enum(['contribution', 'withdrawal', 'growth', 'transfer']),
+  kind: z.enum(['externalIn', 'externalOut', 'synthetic', 'internalTransfer', 'growth']).optional(),
   sourceAccountId: z.string().optional(),
   sourceAccountName: z.string().optional(),
 });
