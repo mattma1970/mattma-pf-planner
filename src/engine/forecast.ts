@@ -1584,7 +1584,8 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       if (sourceAccount.owner) {
         incomeByPerson.set(sourceAccount.owner, (incomeByPerson.get(sourceAccount.owner) ?? 0) + entry.amount);
       }
-      totalIncome += entry.amount;
+      // Note: Returns are already included in totalIncome via the income account endValue
+      // Don't add them again here to avoid double-counting
       
       const fundingAccountId = sourceAccount.taxFundedFromAccountId ?? settings.defaultTaxFundingAccountId;
       if (fundingAccountId) {
@@ -1771,6 +1772,21 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
 
     // Apply deferred entries
     applyDeferredJournalEntries(deferredJournalEntries, yearJournalEntries, accountResults, accountValues, accounts, year, userId, ledgerError);
+    
+    // Recalculate totalIncome and totalExpenses to include deferred entries (returns, etc.)
+    // These were deferred because they depend on end-of-year balances
+    totalIncome = 0;
+    totalExpenses = 0;
+    for (const account of accounts) {
+      const result = accountResults.get(account.id);
+      if (!result) continue;
+      
+      if (account.type === 'income') {
+        totalIncome += result.endValue;
+      } else if (account.type === 'expense') {
+        totalExpenses += result.endValue;
+      }
+    }
     
     // Forward income-account credits to their depositsToAccountId
     for (const entry of yearJournalEntries) {

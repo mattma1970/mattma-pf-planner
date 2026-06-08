@@ -199,6 +199,192 @@ describe('calculateForecast', () => {
       // With income included in growth calculation: average balance = 10000 + 0.5 * 100000 = 60000
       // growth = 60000 * 0.02 = 1200, endValue = 10000 + 100000 + 1200 = 111200
       expect(bank2025!.endValue).toBe(111200);
+
+      // totalIncome should be the sum of all income account endValues
+      const totalIncome = year2025!.accounts
+        .filter(a => a.accountId === salaryAccount.id)
+        .reduce((sum, a) => sum + a.endValue, 0);
+      expect(year2025!.totalIncome).toBe(totalIncome);
+    });
+
+    it('totalIncome includes all income accounts and returns', () => {
+      const salaryAccount = createTestAccount({
+        id: 'salary-2222-2222-2222-222222222222',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0.03 },
+        depositsToAccountId: 'bank-2222-2222-2222-222222222222',
+      });
+
+      const dividendAccount = createTestAccount({
+        id: 'dividend-2222-2222-2222-222222222222',
+        name: 'Dividends',
+        type: 'income',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: 'bank-2222-2222-2222-222222222222',
+      });
+
+      const bankAccount = createTestAccount({
+        id: 'bank-2222-2222-2222-222222222222',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 200000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        returnRate: 0.10,
+        incomeTargetAccountId: 'dividend-2222-2222-2222-222222222222',
+      });
+
+      const result = calculateForecast({
+        accounts: [salaryAccount, dividendAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2025 = result.years[0];
+      const salaryResult = year2025.accounts.find(a => a.accountId === salaryAccount.id)!;
+      const dividendResult = year2025.accounts.find(a => a.accountId === dividendAccount.id)!;
+
+      // totalIncome should be the sum of all income account endValues
+      const expectedTotalIncome = salaryResult.endValue + dividendResult.endValue;
+      expect(year2025.totalIncome).toBe(expectedTotalIncome);
+    });
+
+    it('totalIncome equals sum of all income account endValues', () => {
+      const salaryAccount = createTestAccount({
+        id: 'salary-3333-3333-3333-333333333333',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0.03 },
+        depositsToAccountId: 'bank-3333-3333-3333-333333333333',
+      });
+
+      const drawdownAccount = createTestAccount({
+        id: 'drawdown-3333-3333-3333-333333333333',
+        name: 'Pension Drawdown',
+        type: 'income',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: 'bank-3333-3333-3333-333333333333',
+      });
+
+      const bankAccount = createTestAccount({
+        id: 'bank-3333-3333-3333-333333333333',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const result = calculateForecast({
+        accounts: [salaryAccount, drawdownAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2025 = result.years[0];
+      
+      // totalIncome should equal the sum of all income account endValues
+      const incomeAccounts = year2025.accounts.filter(a => a.accountId === salaryAccount.id || a.accountId === drawdownAccount.id);
+      const sumOfIncome = incomeAccounts.reduce((sum, a) => sum + a.endValue, 0);
+      expect(year2025.totalIncome).toBe(sumOfIncome);
+    });
+
+    it('totalIncome with returns and multiple income accounts', () => {
+      const salaryAccount = createTestAccount({
+        id: 'salary-4444-4444-4444-444444444444',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0.03 },
+        depositsToAccountId: 'bank-4444-4444-4444-444444444444',
+      });
+
+      const dividendAccount = createTestAccount({
+        id: 'dividend-4444-4444-4444-444444444444',
+        name: 'Dividends',
+        type: 'income',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: 'bank-4444-4444-4444-444444444444',
+      });
+
+      const bankAccount = createTestAccount({
+        id: 'bank-4444-4444-4444-444444444444',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 200000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        returnRate: 0.10,
+        incomeTargetAccountId: 'dividend-4444-4444-4444-444444444444',
+      });
+
+      const result = calculateForecast({
+        accounts: [salaryAccount, dividendAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2025 = result.years[0];
+      const salaryResult = year2025.accounts.find(a => a.accountId === salaryAccount.id)!;
+      const dividendResult = year2025.accounts.find(a => a.accountId === dividendAccount.id)!;
+
+      // totalIncome should equal the sum of all income account endValues
+      const expectedTotalIncome = salaryResult.endValue + dividendResult.endValue;
+      expect(year2025.totalIncome).toBe(expectedTotalIncome);
+    });
+
+    it('totalIncome should be the sum of all income account endValues', () => {
+      const salaryAccount = createTestAccount({
+        id: 'salary-5555-5555-5555-555555555555',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0.03 },
+        depositsToAccountId: 'bank-5555-5555-5555-555555555555',
+      });
+
+      const bankAccount = createTestAccount({
+        id: 'bank-5555-5555-5555-555555555555',
+        name: 'Bank Account',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const result = calculateForecast({
+        accounts: [salaryAccount, bankAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2025 = result.years[0];
+      const salaryResult = year2025.accounts.find(a => a.accountId === salaryAccount.id)!;
+
+      // totalIncome should be the sum of all income account endValues
+      expect(year2025.totalIncome).toBe(salaryResult.endValue);
     });
 
     it('expense withdraws from specified asset account', () => {
