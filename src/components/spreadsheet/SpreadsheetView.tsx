@@ -73,6 +73,8 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
   const [isTaxAccountsExpanded, setIsTaxAccountsExpanded] = useState(false);
   const [isContributionsExpanded, setIsContributionsExpanded] = useState<Record<string, boolean>>({});
   const [isWithdrawalsExpanded, setIsWithdrawalsExpanded] = useState<Record<string, boolean>>({});
+  const [isTransfersExpanded, setIsTransfersExpanded] = useState<Record<string, boolean>>({});
+  const [isGrowthExpanded, setIsGrowthExpanded] = useState<Record<string, boolean>>({});
 
   const sortedEpochs = useMemo(() => [...epochs].sort((a, b) => a.order - b.order), [epochs]);
 
@@ -921,7 +923,13 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                 
                 {/* Transfers */}
                 <tr key={`cf-${account.id}-transfer`} className="bg-white">
-                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
+                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6 flex items-center gap-1">
+                    <button 
+                      onClick={() => setIsTransfersExpanded(prev => ({ ...prev, [account.id]: !prev[account.id] }))}
+                      className="hover:text-cyan-600"
+                    >
+                      <span className="text-gray-400 text-xs">{isTransfersExpanded[account.id] ? '▼' : '▶'}</span>
+                    </button>
                     ± Transfers
                   </td>
                   {years.map((yearData) => {
@@ -935,9 +943,43 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                   })}
                 </tr>
                 
+                {/* Transfer breakdown (expandable) */}
+                {isTransfersExpanded[account.id] && (() => {
+                  const allDescriptions = new Set<string>();
+                  years.forEach((yearData) => {
+                    const result = yearData.accounts.find(a => a.accountId === account.id);
+                    result?.cashflowDetails?.filter(d => d.type === 'transfer').forEach(d => allDescriptions.add(d.description));
+                  });
+                  
+                  return Array.from(allDescriptions).map((description) => (
+                    <tr key={`cf-${account.id}-transfer-${description}`} className="bg-gray-50/50">
+                      <td className="px-3 py-0.5 text-left text-gray-500 text-xs sticky left-0 bg-gray-50/50 border-r border-gray-200 min-w-48 pl-10">
+                        {description}
+                      </td>
+                      {years.map((yearData) => {
+                        const result = yearData.accounts.find(a => a.accountId === account.id);
+                        const detail = result?.cashflowDetails?.find(d => d.description === description && d.type === 'transfer');
+                        return (
+                          <td key={yearData.year} className="px-3 py-0.5 text-right text-xs text-gray-500">
+                            {detail ? formatCurrency(detail.amount) : '-'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ));
+                })()}
+                
                 {/* Growth / Interest (for liabilities) */}
                 <tr key={`cf-${account.id}-growth`} className="bg-white">
-                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6">
+                  <td className="px-3 py-1 text-left text-gray-600 text-sm sticky left-0 bg-white border-r border-gray-200 min-w-48 pl-6 flex items-center gap-1">
+                    {!isLiability && (
+                      <button 
+                        onClick={() => setIsGrowthExpanded(prev => ({ ...prev, [account.id]: !prev[account.id] }))}
+                        className="hover:text-cyan-600"
+                      >
+                        <span className="text-gray-400 text-xs">{isGrowthExpanded[account.id] ? '▼' : '▶'}</span>
+                      </button>
+                    )}
                     {isLiability ? '+ Interest Accrued' : '+ Growth'}
                   </td>
                   {years.map((yearData) => {
@@ -950,6 +992,32 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
                     );
                   })}
                 </tr>
+                
+                {/* Growth breakdown (expandable, for non-liabilities) */}
+                {!isLiability && isGrowthExpanded[account.id] && (() => {
+                  const allDescriptions = new Set<string>();
+                  years.forEach((yearData) => {
+                    const result = yearData.accounts.find(a => a.accountId === account.id);
+                    result?.cashflowDetails?.filter(d => d.type === 'growth').forEach(d => allDescriptions.add(d.description));
+                  });
+                  
+                  return Array.from(allDescriptions).map((description) => (
+                    <tr key={`cf-${account.id}-growth-${description}`} className="bg-gray-50/50">
+                      <td className="px-3 py-0.5 text-left text-gray-500 text-xs sticky left-0 bg-gray-50/50 border-r border-gray-200 min-w-48 pl-10">
+                        {description}
+                      </td>
+                      {years.map((yearData) => {
+                        const result = yearData.accounts.find(a => a.accountId === account.id);
+                        const detail = result?.cashflowDetails?.find(d => d.description === description && d.type === 'growth');
+                        return (
+                          <td key={yearData.year} className="px-3 py-0.5 text-right text-xs text-gray-500">
+                            {detail ? formatCurrency(detail.amount) : '-'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ));
+                })()}
                 
                 {/* Interest Paid (for liabilities only) - interest is always paid */}
                 {isLiability && (
