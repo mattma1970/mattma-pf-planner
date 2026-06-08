@@ -4314,7 +4314,7 @@ const result = calculateForecast({
         (d) => d.description === 'Fund asset: Funded Asset',
       );
       expect(fundedByEntry).toBeDefined();
-      expect(fundedByEntry?.amount).toBe(200_000);
+      expect(fundedByEntry?.amount).toBe(-200_000);
       expect(fundedByEntry?.type).toBe('transfer');
 
       // No fundedBy completeness warning

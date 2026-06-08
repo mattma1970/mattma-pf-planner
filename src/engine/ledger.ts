@@ -151,7 +151,7 @@ export function emitJournalEntry(
     if (!result.cashflowDetails) result.cashflowDetails = [];
     result.cashflowDetails.push({
       description: label,
-      amount,
+      amount: kind === 'internalTransfer' ? delta : amount,
       type: kind === 'growth' ? 'growth' : kind === 'internalTransfer' ? 'transfer' : delta > 0 ? 'contribution' : 'withdrawal',
       kind,
       sourceAccountId,
