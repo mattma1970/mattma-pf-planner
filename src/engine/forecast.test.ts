@@ -4326,5 +4326,354 @@ const result = calculateForecast({
       // Bank balance should be reduced by the purchase
       expect(bankResult.endValue).toBe(800_000);
     });
+
+    it('fundedBy asset has startValue of 0 and endValue of initialValue in first year', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-7777-7777-7777-777777777777',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 1_000_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const fundedAsset = createTestAccount({
+        id: 'asset-7777-7777-7777-777777777777',
+        name: 'Funded Asset',
+        type: 'asset',
+        initialValue: 200_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+        startCondition: { type: 'year', year: 2026 },
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, fundedAsset],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2026 = result.years.find((y) => y.year === 2026)!;
+      const assetResult = year2026.accounts.find((a) => a.accountId === fundedAsset.id)!;
+      const bankResult = year2026.accounts.find((a) => a.accountId === bankAccount.id)!;
+
+      // Asset should start at 0 and end at initialValue
+      expect(assetResult.startValue).toBe(0);
+      expect(assetResult.endValue).toBe(200_000);
+
+      // Bank should be reduced by the purchase
+      expect(bankResult.startValue).toBe(1_000_000);
+      expect(bankResult.endValue).toBe(800_000);
+    });
+
+    it('fundedBy asset with growth in first year', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-8888-8888-8888-888888888888',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 1_000_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const fundedAsset = createTestAccount({
+        id: 'asset-8888-8888-8888-888888888888',
+        name: 'Funded Asset',
+        type: 'asset',
+        initialValue: 200_000,
+        growthProfile: { type: 'fixed', rate: 0.05 },
+        fundedByAccountId: bankAccount.id,
+        startCondition: { type: 'year', year: 2026 },
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, fundedAsset],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2026 = result.years.find((y) => y.year === 2026)!;
+      const assetResult = year2026.accounts.find((a) => a.accountId === fundedAsset.id)!;
+      const bankResult = year2026.accounts.find((a) => a.accountId === bankAccount.id)!;
+
+      // Asset: growth calculated on average balance (0 + 200_000)/2 = 100_000
+      // growth = 100_000 * 0.05 = 5_000
+      expect(assetResult.endValue).toBe(205_000);
+      expect(assetResult.growth).toBe(5_000);
+
+      // Bank: reduced by 200_000, no growth
+      expect(bankResult.endValue).toBe(800_000);
+    });
+
+    it('fundedBy asset with returns in first year', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-9999-9999-9999-999999999999',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 1_000_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const fundedAsset = createTestAccount({
+        id: 'asset-9999-9999-9999-999999999999',
+        name: 'Funded Asset',
+        type: 'asset',
+        initialValue: 200_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        returnRate: 0.10,
+        incomeTargetAccountId: 'income-9999-9999-9999-999999999999',
+        fundedByAccountId: bankAccount.id,
+        startCondition: { type: 'year', year: 2026 },
+      });
+
+      const dividendAccount = createTestAccount({
+        id: 'income-9999-9999-9999-999999999999',
+        name: 'Dividends',
+        type: 'income',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: bankAccount.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, fundedAsset, dividendAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2026 = result.years.find((y) => y.year === 2026)!;
+      const assetResult = year2026.accounts.find((a) => a.accountId === fundedAsset.id)!;
+      const bankResult = year2026.accounts.find((a) => a.accountId === bankAccount.id)!;
+      const divResult = year2026.accounts.find((a) => a.accountId === dividendAccount.id)!;
+
+      // Asset: fundedBy establishes 200_000
+      expect(assetResult.endValue).toBe(200_000);
+      expect(assetResult.startValue).toBe(0);
+
+      // Return calculated on average balance (0 + 200_000)/2 = 100_000
+      // return = 100_000 * 0.10 = 10_000
+      expect(divResult.endValue).toBe(10_000);
+
+      // Bank: 1_000_000 - 200_000 (purchase) + 10_000 (return) = 810_000
+      expect(bankResult.endValue).toBe(810_000);
+    });
+
+    it('multiple fundedBy assets in same year', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 1_000_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const fundedAsset1 = createTestAccount({
+        id: 'asset-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        name: 'Funded Asset 1',
+        type: 'asset',
+        initialValue: 200_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+        startCondition: { type: 'year', year: 2026 },
+      });
+
+      const fundedAsset2 = createTestAccount({
+        id: 'asset-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        name: 'Funded Asset 2',
+        type: 'asset',
+        initialValue: 300_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+        startCondition: { type: 'year', year: 2026 },
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, fundedAsset1, fundedAsset2],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2026 = result.years.find((y) => y.year === 2026)!;
+      const asset1Result = year2026.accounts.find((a) => a.accountId === fundedAsset1.id)!;
+      const asset2Result = year2026.accounts.find((a) => a.accountId === fundedAsset2.id)!;
+      const bankResult = year2026.accounts.find((a) => a.accountId === bankAccount.id)!;
+
+      // Both assets should start at 0 and end at their initialValue
+      expect(asset1Result.startValue).toBe(0);
+      expect(asset1Result.endValue).toBe(200_000);
+      expect(asset2Result.startValue).toBe(0);
+      expect(asset2Result.endValue).toBe(300_000);
+
+      // Bank should be reduced by both purchases
+      expect(bankResult.endValue).toBe(500_000);
+    });
+
+    it('fundedBy asset with zero initialValue creates no entry', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-cccc-cccc-cccc-cccccccccccc',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 1_000_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const zeroValueAsset = createTestAccount({
+        id: 'asset-cccc-cccc-cccc-cccccccccccc',
+        name: 'Zero Value Asset',
+        type: 'asset',
+        initialValue: 0,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+        startCondition: { type: 'year', year: 2026 },
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, zeroValueAsset],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2026 = result.years.find((y) => y.year === 2026)!;
+      const bankResult = year2026.accounts.find((a) => a.accountId === bankAccount.id)!;
+      const assetResult = year2026.accounts.find((a) => a.accountId === zeroValueAsset.id)!;
+
+      // No fundedBy entry should be created
+      const fundedByEntry = bankResult.cashflowDetails?.find(
+        (d) => d.description === 'Fund asset: Zero Value Asset',
+      );
+      expect(fundedByEntry).toBeUndefined();
+
+      // Bank balance should be unchanged
+      expect(bankResult.endValue).toBe(1_000_000);
+
+      // Asset should have 0 balance
+      expect(assetResult.endValue).toBe(0);
+    });
+
+    it('fundedBy asset with income event in same year', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-dddd-dddd-dddd-dddddddddddd',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 1_000_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const fundedAsset = createTestAccount({
+        id: 'asset-dddd-dddd-dddd-dddddddddddd',
+        name: 'Funded Asset',
+        type: 'asset',
+        initialValue: 200_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+        startCondition: { type: 'year', year: 2026 },
+      });
+
+      const incomeEvent: Event = {
+        id: 'event-dddd-dddd-dddd-dddddddddddd',
+        type: 'income',
+        description: 'Rental Income',
+        year: 2026,
+        amount: 50_000,
+        affectedAccountId: fundedAsset.id,
+      };
+
+      const result = calculateForecast({
+        accounts: [bankAccount, fundedAsset],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [incomeEvent],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2026 = result.years.find((y) => y.year === 2026)!;
+      const assetResult = year2026.accounts.find((a) => a.accountId === fundedAsset.id)!;
+      const bankResult = year2026.accounts.find((a) => a.accountId === bankAccount.id)!;
+
+      // Asset: fundedBy establishes 200_000, income event adds 50_000
+      expect(assetResult.startValue).toBe(0);
+      expect(assetResult.endValue).toBe(250_000);
+      expect(assetResult.contributions).toBe(50_000);
+
+      // Bank: reduced by 200_000
+      expect(bankResult.endValue).toBe(800_000);
+    });
+
+    it('fundedBy asset reconciliation: startValue + growth + contributions - withdrawals + transfers = endValue', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-eeee-eeee-eeee-eeeeeeeeeeee',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 1_000_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const fundedAsset = createTestAccount({
+        id: 'asset-eeee-eeee-eeee-eeeeeeeeeeee',
+        name: 'Funded Asset',
+        type: 'asset',
+        initialValue: 200_000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+        startCondition: { type: 'year', year: 2026 },
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, fundedAsset],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2027,
+      });
+
+      const year2026 = result.years.find((y) => y.year === 2026)!;
+      const assetResult = year2026.accounts.find((a) => a.accountId === fundedAsset.id)!;
+      const bankResult = year2026.accounts.find((a) => a.accountId === bankAccount.id)!;
+
+      // Asset reconciliation: startValue (0) + growth (0) + contributions (0) - withdrawals (0) + transfers (200_000) = endValue (200_000)
+      const assetReconciled = assetResult.startValue + assetResult.growth + assetResult.contributions - assetResult.withdrawals + assetResult.transfers;
+      expect(assetReconciled).toBe(assetResult.endValue);
+      expect(assetReconciled).toBe(200_000);
+
+      // Bank reconciliation: startValue (1_000_000) + growth (0) + contributions (0) - withdrawals (0) + transfers (-200_000) = endValue (800_000)
+      const bankReconciled = bankResult.startValue + bankResult.growth + bankResult.contributions - bankResult.withdrawals + bankResult.transfers;
+      expect(bankReconciled).toBe(bankResult.endValue);
+      expect(bankReconciled).toBe(800_000);
+
+      // No reconciliation warnings
+      const reconciliationWarnings = year2026.warnings?.filter(
+        (w) => w.type === 'other' && w.message?.includes('reconciliation'),
+      ) ?? [];
+      expect(reconciliationWarnings).toHaveLength(0);
+    });
   });
 });
