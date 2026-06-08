@@ -75,6 +75,8 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
   const [isWithdrawalsExpanded, setIsWithdrawalsExpanded] = useState<Record<string, boolean>>({});
   const [isTransfersExpanded, setIsTransfersExpanded] = useState<Record<string, boolean>>({});
   const [isGrowthExpanded, setIsGrowthExpanded] = useState<Record<string, boolean>>({});
+  const [isTotalIncomeExpanded, setIsTotalIncomeExpanded] = useState(false);
+  const [isTotalExpensesExpanded, setIsTotalExpensesExpanded] = useState(false);
 
   const sortedEpochs = useMemo(() => [...epochs].sort((a, b) => a.order - b.order), [epochs]);
 
@@ -1274,14 +1276,67 @@ export function SpreadsheetView({ forecast, accounts, epochs = [], persons = [],
             </th>
           </tr>
           {totalsRows.map((row) => (
-            <tr key={row.label} className={row.isBold ? 'font-semibold bg-gray-50' : ''}>
-              <td className="px-3 py-2 text-left text-gray-900 sticky left-0 bg-white border-r border-gray-200 min-w-48">
-                {row.label}
-              </td>
-              {years.map((y) => (
-                <YearCell key={y.year} value={row.getValue(y)} />
-              ))}
-            </tr>
+            <Fragment key={row.label}>
+              <tr className={row.isBold ? 'font-semibold bg-gray-50' : ''}>
+                <td className="px-3 py-2 text-left text-gray-900 sticky left-0 bg-white border-r border-gray-200 min-w-48 flex items-center gap-1">
+                  {(row.label === 'Total Income' || row.label === 'Total Expenses') && (
+                    <button
+                      onClick={() => {
+                        if (row.label === 'Total Income') setIsTotalIncomeExpanded(!isTotalIncomeExpanded);
+                        else setIsTotalExpensesExpanded(!isTotalExpensesExpanded);
+                      }}
+                      className="hover:text-cyan-600"
+                    >
+                      <span className="text-gray-400 text-xs">
+                        {(row.label === 'Total Income' ? isTotalIncomeExpanded : isTotalExpensesExpanded) ? '▼' : '▶'}
+                      </span>
+                    </button>
+                  )}
+                  {row.label}
+                </td>
+                {years.map((y) => (
+                  <YearCell key={y.year} value={row.getValue(y)} />
+                ))}
+              </tr>
+              {/* Income breakdown */}
+              {row.label === 'Total Income' && isTotalIncomeExpanded && (() => {
+                const incomeAccounts = accounts.filter(a => a.type === 'income');
+                return incomeAccounts.map(account => (
+                  <tr key={`income-${account.id}`} className="bg-gray-50/50">
+                    <td className="px-3 py-1 text-left text-gray-500 text-xs sticky left-0 bg-gray-50/50 border-r border-gray-200 min-w-48 pl-8">
+                      {account.name}
+                    </td>
+                    {years.map((y) => {
+                      const result = y.accounts.find(a => a.accountId === account.id);
+                      return (
+                        <td key={y.year} className="px-3 py-1 text-right text-xs text-gray-500">
+                          {result ? new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(result.endValue) : '-'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ));
+              })()}
+              {/* Expense breakdown */}
+              {row.label === 'Total Expenses' && isTotalExpensesExpanded && (() => {
+                const expenseAccounts = accounts.filter(a => a.type === 'expense');
+                return expenseAccounts.map(account => (
+                  <tr key={`expense-${account.id}`} className="bg-gray-50/50">
+                    <td className="px-3 py-1 text-left text-gray-500 text-xs sticky left-0 bg-gray-50/50 border-r border-gray-200 min-w-48 pl-8">
+                      {account.name}
+                    </td>
+                    {years.map((y) => {
+                      const result = y.accounts.find(a => a.accountId === account.id);
+                      return (
+                        <td key={y.year} className="px-3 py-1 text-right text-xs text-gray-500">
+                          {result ? new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(result.endValue) : '-'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ));
+              })()}
+            </Fragment>
           ))}
 
 
