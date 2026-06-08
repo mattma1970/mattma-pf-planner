@@ -43,7 +43,12 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
   });
   const [cpiValue, setCpiValue] = useState(() => {
     const gp = account?.growthProfile;
-    if (gp?.type === 'cpiLinked') return ((gp.value ?? 0) * 100).toString();
+    if (gp?.type === 'cpiLinked') {
+      // For multiply, value is a raw multiplier (e.g., 1.5 for 1.5x CPI)
+      // For add/subtract, value is stored as decimal (e.g., 0.015 for 1.5%) but displayed as percentage
+      if (gp.operation === 'multiply') return (gp.value ?? 0).toString();
+      return ((gp.value ?? 0) * 100).toString();
+    }
     return '0';
   });
   const [changePerYear, setChangePerYear] = useState(() => {
@@ -245,7 +250,11 @@ export function AccountForm({ account, accounts, persons, settings, onSubmit, on
     const growthProfile: GrowthProfile = (() => {
       const rate = (parseFloat(growthRate) || 0) / 100;
       const change = (parseFloat(changePerYear) || 0) / 100;
-      const cpiVal = parseFloat(cpiValue) || 0; // Don't divide by 100 - this is a multiplier (e.g., 0.5 for 50% of CPI), not a percentage
+      // For multiply, value is a raw multiplier (e.g., 1.5 for 1.5x CPI)
+      // For add/subtract, value is a percentage in UI (e.g., 1.5 for 1.5%) but stored as decimal (0.015)
+      const cpiVal = cpiOperation === 'multiply' 
+        ? (parseFloat(cpiValue) || 0)
+        : (parseFloat(cpiValue) || 0) / 100;
       switch (growthType) {
         case 'fixed':
           return { type: 'fixed' as const, rate };

@@ -2648,6 +2648,34 @@ const result = calculateForecast({
       expect(getExpense(2029)).toBeCloseTo(2251.02, 0);
     });
 
+    it('cpiLinked multiply stores and applies correct multiplier', () => {
+      const account = createTestAccount({
+        id: 'cpi-multiply-1111-1111-1111-111111111111',
+        name: 'CPI Multiplier',
+        type: 'asset',
+        initialValue: 100000,
+        growthProfile: { type: 'cpiLinked', operation: 'multiply', value: 1.5 },
+      });
+
+      const result = calculateForecast({
+        accounts: [account],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2026,
+      });
+
+      const year2025 = result.years.find((y) => y.year === 2025);
+      const accountResult = year2025!.accounts.find((a) => a.accountId === account.id)!;
+      
+      // CPI = 3%, multiplier = 1.5, so growth = 3% * 1.5 = 4.5%
+      // 100000 * 1.045 = 104500
+      expect(accountResult.endValue).toBeCloseTo(104500, 0);
+    });
+
     it('combines balance-based and periodic expense', () => {
       const houseAccount = createTestAccount({
         id: 'house-2222-2222-2222-222222222222',
