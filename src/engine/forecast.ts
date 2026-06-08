@@ -324,13 +324,22 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
 
     for (const account of accounts) {
       const isFirstActiveYear = accountStartYears.get(account.id) === year;
-      const openingValue = account.type === 'income'
-        ? 0
-        : isFirstActiveYear
-          ? account.initialValue
-          : accountStartYears.has(account.id)
-            ? (accountValues.get(account.id) ?? 0)
-            : 0;
+      let openingValue: number;
+      if (account.type === 'income') {
+        openingValue = 0;
+      } else if (isFirstActiveYear) {
+        // For assets funded by another account, the opening balance is 0
+        // The value will be established by the fundedBy transfer entry
+        if (account.type === 'asset' && account.fundedByAccountId) {
+          openingValue = 0;
+        } else {
+          openingValue = account.initialValue;
+        }
+      } else if (accountStartYears.has(account.id)) {
+        openingValue = accountValues.get(account.id) ?? 0;
+      } else {
+        openingValue = 0;
+      }
       accountResults.set(account.id, {
         accountId: account.id,
         year,
