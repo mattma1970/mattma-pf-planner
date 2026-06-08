@@ -771,6 +771,134 @@ describe('calculateForecast', () => {
   });
 
   describe('auto-topup', () => {
+    it('does not trigger auto-topup when balance is above threshold with tax', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-1111-1111-1111-111111111111',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 28000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        autoTopup: {
+          enabled: true,
+          threshold: 0,
+          fromAccountIds: ['pension-1111-1111-1111-111111111111'],
+        },
+      });
+
+      const pensionAccount = createTestAccount({
+        id: 'pension-1111-1111-1111-111111111111',
+        name: 'Pension Fund',
+        type: 'asset',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const incomeAccount = createTestAccount({
+        id: 'income-1111-1111-1111-111111111111',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 122000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: bankAccount.id,
+        taxFundedFromAccountId: bankAccount.id,
+      });
+
+      const expenseAccount = createTestAccount({
+        id: 'expense-1111-1111-1111-111111111111',
+        name: 'Living Expenses',
+        type: 'expense',
+        initialValue: 112000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, pensionAccount, incomeAccount, expenseAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const bank2025 = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      const pension2025 = result.years[0].accounts.find(a => a.accountId === pensionAccount.id)!;
+      
+      // Bank starts with 28k, gets 122k income, pays 112k expenses, pays tax
+      // After tax: 28k + 122k - 112k - 30k tax = 8k (positive)
+      // No auto-topup should trigger because balance is above threshold of 0
+      expect(bank2025.endValue).toBeGreaterThan(0);
+      expect(bank2025.autoTopupApplied).toBeUndefined();
+      expect(pension2025.endValue).toBe(500000);
+    });
+
+    it('does not trigger auto-topup when balance is above threshold', () => {
+      const bankAccount = createTestAccount({
+        id: 'bank-1111-1111-1111-111111111111',
+        name: 'Bank',
+        type: 'asset',
+        initialValue: 28000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        autoTopup: {
+          enabled: true,
+          threshold: 0,
+          fromAccountIds: ['pension-1111-1111-1111-111111111111'],
+        },
+      });
+
+      const pensionAccount = createTestAccount({
+        id: 'pension-1111-1111-1111-111111111111',
+        name: 'Pension Fund',
+        type: 'asset',
+        initialValue: 500000,
+        growthProfile: { type: 'fixed', rate: 0 },
+      });
+
+      const incomeAccount = createTestAccount({
+        id: 'income-1111-1111-1111-111111111111',
+        name: 'Salary',
+        type: 'income',
+        initialValue: 122000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        depositsToAccountId: bankAccount.id,
+      });
+
+      const expenseAccount = createTestAccount({
+        id: 'expense-1111-1111-1111-111111111111',
+        name: 'Living Expenses',
+        type: 'expense',
+        initialValue: 112000,
+        growthProfile: { type: 'fixed', rate: 0 },
+        fundedByAccountId: bankAccount.id,
+      });
+
+      const result = calculateForecast({
+        accounts: [bankAccount, pensionAccount, incomeAccount, expenseAccount],
+        assumptions: defaultAssumptions,
+        epochs: defaultEpochs,
+        events: [],
+        persons: [],
+        settings: testSettings,
+        startYear: 2025,
+        endYear: 2025,
+      });
+
+      const bank2025 = result.years[0].accounts.find(a => a.accountId === bankAccount.id)!;
+      const pension2025 = result.years[0].accounts.find(a => a.accountId === pensionAccount.id)!;
+      
+      // Bank: 28k + 122k - 112k = 38k, which is above threshold of 0
+      // No auto-topup should trigger
+      expect(bank2025.endValue).toBe(38000);
+      expect(bank2025.transfers).toBe(0);
+      expect(bank2025.autoTopupApplied).toBeUndefined();
+      
+      // Pension should remain unchanged
+      expect(pension2025.endValue).toBe(500000);
+      expect(pension2025.transfers).toBe(0);
+    });
+
     it('tops up account when balance falls below threshold', () => {
       const bankAccount = createTestAccount({
         id: 'bank-1111-1111-1111-111111111111',
