@@ -1710,7 +1710,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
             }
           }
           result.endValue = projectedValue + result.endValue;
-          totalIncome += projectedValue;
+          // Note: totalIncome already incremented in Pass 3 for active accounts
           priorYearInflows.set(account.id, projectedValue);
         }
       } else if (account.type === 'expense') {
@@ -1752,7 +1752,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           
           const expenseResult = calculateExpenseValue(account, year, grownBaseValue, openingValues, accountStartYear, accounts, persons);
           result.endValue = expenseResult.value;
-          totalExpenses += expenseResult.value;
+          // Note: totalExpenses already incremented in Pass 3 for active accounts
           priorYearInflows.set(account.id, expenseResult.value);
         }
       } else if (!isActive && !isLifecycleEnding) {
