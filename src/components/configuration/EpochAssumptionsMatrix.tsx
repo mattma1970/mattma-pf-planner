@@ -130,21 +130,9 @@ export function EpochAssumptionsMatrix({
     return epoch?.globalAssumptions?.[key] !== undefined;
   };
 
-  const getAccountFieldValue = (epochId: string, accountId: string, field: AccountField): number | undefined => {
-    const epoch = epochs.find(e => e.id === epochId);
+  const getAccountFieldValue = (_epochId: string, accountId: string, field: AccountField): number | undefined => {
     const account = accounts.find(a => a.id === accountId);
     if (!account) return undefined;
-    
-    const override = epoch?.accountAssumptions?.[accountId]?.[field];
-    if (override !== undefined) return override;
-    
-    const epochIndex = sortedEpochs.findIndex(e => e.id === epochId);
-    if (epochIndex > 0) {
-      for (let i = epochIndex - 1; i >= 0; i--) {
-        const prevOverride = sortedEpochs[i].accountAssumptions?.[accountId]?.[field];
-        if (prevOverride !== undefined) return prevOverride;
-      }
-    }
     
     if (field === 'growthRate') {
       return getGrowthParamFromProfile(account);
@@ -154,9 +142,8 @@ export function EpochAssumptionsMatrix({
     return undefined;
   };
 
-  const isAccountFieldOverridden = (epochId: string, accountId: string, field: AccountField): boolean => {
-    const epoch = epochs.find(e => e.id === epochId);
-    return epoch?.accountAssumptions?.[accountId]?.[field] !== undefined;
+  const isAccountFieldOverridden = (): boolean => {
+    return false;
   };
 
   const handleCellClick = (epochId: string, rowKey: string, field: 'global' | AccountField, currentValue: number | undefined) => {
@@ -272,10 +259,10 @@ export function EpochAssumptionsMatrix({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [editingCell, editValue]);
 
-  const renderCell = (epochId: string, rowKey: string, field: 'global' | AccountField, value: number | undefined, isOverridden: boolean) => {
+  const renderCell = (epochId: string, rowKey: string, field: 'global' | AccountField, value: number | undefined, isOverridden: boolean, readonly: boolean = false) => {
     const isEditing = editingCell?.epochId === epochId && editingCell?.rowKey === rowKey && editingCell?.field === field;
     
-    if (isEditing) {
+    if (isEditing && !readonly) {
       return (
         <div className="flex items-center gap-1">
           <input
@@ -290,6 +277,14 @@ export function EpochAssumptionsMatrix({
           <button onClick={handleCellSave} className="text-green-600 text-xs px-1">✓</button>
           <button onClick={handleCellClear} className="text-red-600 text-xs px-1">✕</button>
         </div>
+      );
+    }
+    
+    if (readonly) {
+      return (
+        <span className="w-full text-left px-2 py-1 text-gray-600">
+          {formatPercent(value)}
+        </span>
       );
     }
     
@@ -328,7 +323,8 @@ export function EpochAssumptionsMatrix({
                     account.id,
                     'growthRate',
                     getAccountFieldValue(epoch.id, account.id, 'growthRate'),
-                    isAccountFieldOverridden(epoch.id, account.id, 'growthRate')
+                    isAccountFieldOverridden(),
+                    true
                   )}
                 </td>
               ))}
@@ -345,7 +341,8 @@ export function EpochAssumptionsMatrix({
                       account.id,
                       'returnRate',
                       getAccountFieldValue(epoch.id, account.id, 'returnRate'),
-                      isAccountFieldOverridden(epoch.id, account.id, 'returnRate')
+                      isAccountFieldOverridden(),
+                      true
                     )}
                   </td>
                 ))}
