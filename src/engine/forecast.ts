@@ -1600,64 +1600,6 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       }
     }
     
-    const netPosition = totalIncome - totalExpenses - taxPayable;
-
-    // ===========================================
-    // PASS 8: Auto-topup
-    // ===========================================
-    for (const account of accounts) {
-      if (account.type !== 'asset' || !account.autoTopup?.enabled) continue;
-      
-      const result = accountResults.get(account.id);
-      if (!result) continue;
-      
-      const threshold = account.autoTopup.threshold ?? 0;
-      
-      if (result.endValue < threshold) {
-        const targetBalance = account.autoTopup.targetBalance ?? threshold;
-        let topupAmount = targetBalance - result.endValue;
-        
-        if (topupAmount <= 0) continue;
-        
-        const sourceAccountIds = account.autoTopup.fromAccountIds ?? [];
-        let remainingTopup = topupAmount;
-        
-        for (const sourceAccountId of sourceAccountIds) {
-          if (remainingTopup <= 0) break;
-          
-          const sourceResult = accountResults.get(sourceAccountId);
-          const sourceAccount = accounts.find(a => a.id === sourceAccountId);
-          if (!sourceResult || !sourceAccount) continue;
-          
-          const availableBalance = sourceResult.endValue;
-          let drawAmount: number;
-          
-          if (sourceAccountIds.length === 1) {
-            drawAmount = remainingTopup;
-          } else {
-            drawAmount = Math.min(remainingTopup, availableBalance);
-          }
-          
-          if (drawAmount > 0) {
-            emit({
-              debitAccountId: account.id,
-              creditAccountId: sourceAccountId,
-              amount: drawAmount,
-              label: `Auto top-up to: ${account.name}`,
-              kind: 'internalTransfer',
-              sourceAccountId: account.id,
-              sourceAccountName: account.name,
-            });
-            
-            result.autoTopupApplied = true;
-            sourceResult.autoTopupApplied = true;
-            
-            remainingTopup -= drawAmount;
-          }
-        }
-      }
-    }
-
     // Set endValue for income/expense accounts and handle inactive accounts
     for (const account of accounts) {
       const isActive = isAccountActive(account, year, persons);
@@ -1815,6 +1757,64 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
         }
       }
     }
+    
+    // ===========================================
+    // PASS 8: Auto-topup (after deferred entries and income forwarding)
+    // ===========================================
+    for (const account of accounts) {
+      if (account.type !== 'asset' || !account.autoTopup?.enabled) continue;
+      
+      const result = accountResults.get(account.id);
+      if (!result) continue;
+      
+      const threshold = account.autoTopup.threshold ?? 0;
+      
+      if (result.endValue < threshold) {
+        const targetBalance = account.autoTopup.targetBalance ?? threshold;
+        const topupAmount = targetBalance - result.endValue;
+        
+        if (topupAmount <= 0) continue;
+        
+        const sourceAccountIds = account.autoTopup.fromAccountIds ?? [];
+        let remainingTopup = topupAmount;
+        
+        for (const sourceAccountId of sourceAccountIds) {
+          if (remainingTopup <= 0) break;
+          
+          const sourceResult = accountResults.get(sourceAccountId);
+          const sourceAccount = accounts.find(a => a.id === sourceAccountId);
+          if (!sourceResult || !sourceAccount) continue;
+          
+          const availableBalance = sourceResult.endValue;
+          let drawAmount: number;
+          
+          if (sourceAccountIds.length === 1) {
+            drawAmount = remainingTopup;
+          } else {
+            drawAmount = Math.min(remainingTopup, availableBalance);
+          }
+          
+          if (drawAmount > 0) {
+            emit({
+              debitAccountId: account.id,
+              creditAccountId: sourceAccountId,
+              amount: drawAmount,
+              label: `Auto top-up to: ${account.name}`,
+              kind: 'internalTransfer',
+              sourceAccountId: account.id,
+              sourceAccountName: account.name,
+            });
+            
+            result.autoTopupApplied = true;
+            sourceResult.autoTopupApplied = true;
+            
+            remainingTopup -= drawAmount;
+          }
+        }
+      }
+    }
+    
+    const netPosition = totalIncome - totalExpenses - taxPayable;
     
     // Final pass: set accountValues
     for (const account of accounts) {

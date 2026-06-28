@@ -4440,6 +4440,148 @@ const result = calculateForecast({
       });
     });
 
+    describe('auto-topup with deferred entries (pension drawdowns via income account)', () => {
+      it('does not trigger auto-topup when pension drawdowns via income account bring balance to threshold', () => {
+        const person: Person = {
+          id: 'person-7777-7777-7777-777777777777',
+          name: 'Test',
+          birthYear: 1960,
+        };
+
+        const bankAccount = createTestAccount({
+          id: 'bank-7777-7777-7777-777777777777',
+          name: 'Bank',
+          type: 'asset',
+          initialValue: 10_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+          autoTopup: {
+            enabled: true,
+            threshold: 0,
+            fromAccountIds: ['pension-7777-7777-7777-777777777777'],
+            targetBalance: 5_000,
+          },
+        });
+
+        const pensionAccount = createTestAccount({
+          id: 'pension-7777-7777-7777-777777777777',
+          name: 'Pension',
+          type: 'asset',
+          assetSubType: 'allocatedPension',
+          owner: person.id,
+          initialValue: 100_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+          incomeTargetAccountId: 'pension-income-7777-7777-7777-777777777777',
+        });
+
+        const pensionIncomeAccount = createTestAccount({
+          id: 'pension-income-7777-7777-7777-777777777777',
+          name: 'Pension Drawdown Income',
+          type: 'income',
+          initialValue: 0,
+          growthProfile: { type: 'fixed', rate: 0 },
+          depositsToAccountId: 'bank-7777-7777-7777-777777777777',
+        });
+
+        const expenseAccount = createTestAccount({
+          id: 'expense-7777-7777-7777-777777777777',
+          name: 'Living Expenses',
+          type: 'expense',
+          initialValue: 15_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+          fundedByAccountId: 'bank-7777-7777-7777-777777777777',
+        });
+
+        const result = calculateForecast({
+          accounts: [bankAccount, pensionAccount, pensionIncomeAccount, expenseAccount],
+          assumptions: defaultAssumptions,
+          epochs: defaultEpochs,
+          events: [],
+          persons: [person],
+          settings: testSettings,
+          startYear: 2025,
+          endYear: 2025,
+        });
+
+        const year = result.years[0];
+        const bankResult = year.accounts.find(a => a.accountId === bankAccount.id)!;
+
+        // Bank: 10k - 15k expenses + 5k drawdown (5% of 100k, age 65) = 0
+        // Auto-topup should NOT trigger because balance (0) is not below threshold (0)
+        expect(bankResult.autoTopupApplied).toBeUndefined();
+        expect(bankResult.transfers).toBe(0);
+      });
+
+      it('triggers auto-topup when pension drawdowns are insufficient to bring balance above threshold', () => {
+        const person: Person = {
+          id: 'person-8888-8888-8888-888888888888',
+          name: 'Test',
+          birthYear: 1960,
+        };
+
+        const bankAccount = createTestAccount({
+          id: 'bank-8888-8888-8888-888888888888',
+          name: 'Bank',
+          type: 'asset',
+          initialValue: 10_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+          autoTopup: {
+            enabled: true,
+            threshold: 0,
+            fromAccountIds: ['pension-8888-8888-8888-888888888888'],
+            targetBalance: 5_000,
+          },
+        });
+
+        const pensionAccount = createTestAccount({
+          id: 'pension-8888-8888-8888-888888888888',
+          name: 'Pension',
+          type: 'asset',
+          assetSubType: 'allocatedPension',
+          owner: person.id,
+          initialValue: 100_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+          incomeTargetAccountId: 'pension-income-8888-8888-8888-888888888888',
+        });
+
+        const pensionIncomeAccount = createTestAccount({
+          id: 'pension-income-8888-8888-8888-888888888888',
+          name: 'Pension Drawdown Income',
+          type: 'income',
+          initialValue: 0,
+          growthProfile: { type: 'fixed', rate: 0 },
+          depositsToAccountId: 'bank-8888-8888-8888-888888888888',
+        });
+
+        const expenseAccount = createTestAccount({
+          id: 'expense-8888-8888-8888-888888888888',
+          name: 'Living Expenses',
+          type: 'expense',
+          initialValue: 20_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+          fundedByAccountId: 'bank-8888-8888-8888-888888888888',
+        });
+
+        const result = calculateForecast({
+          accounts: [bankAccount, pensionAccount, pensionIncomeAccount, expenseAccount],
+          assumptions: defaultAssumptions,
+          epochs: defaultEpochs,
+          events: [],
+          persons: [person],
+          settings: testSettings,
+          startYear: 2025,
+          endYear: 2025,
+        });
+
+        const year = result.years[0];
+        const bankResult = year.accounts.find(a => a.accountId === bankAccount.id)!;
+
+        // Bank: 10k - 20k expenses + 5k drawdown = -5k
+        // Auto-topup SHOULD trigger because balance (-5k) is below threshold (0)
+        expect(bankResult.autoTopupApplied).toBe(true);
+        expect(bankResult.endValue).toBe(5_000);
+      });
+    });
+
     describe('income to expense flow conservation', () => {
       it('salary deposited to bank and expense drawn from bank produces no conservation violation', () => {
         const bankAccount = createTestAccount({
