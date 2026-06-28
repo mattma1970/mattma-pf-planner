@@ -1784,6 +1784,7 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
           const sourceResult = accountResults.get(sourceAccountId);
           const sourceAccount = accounts.find(a => a.id === sourceAccountId);
           if (!sourceResult || !sourceAccount) continue;
+          if (sourceAccount.type === 'income' || sourceAccount.type === 'expense') continue;
           
           const availableBalance = sourceResult.endValue;
           let drawAmount: number;

@@ -4582,6 +4582,92 @@ const result = calculateForecast({
       });
     });
 
+    describe('auto-topup source account type guard', () => {
+      it('does not draw from income accounts as auto-topup source', () => {
+        const bankAccount = createTestAccount({
+          id: 'bank-guard-5555-5555-555555555555',
+          name: 'Bank',
+          type: 'asset',
+          initialValue: 0,
+          growthProfile: { type: 'fixed', rate: 0 },
+          autoTopup: {
+            enabled: true,
+            threshold: 10_000,
+            targetBalance: 10_000,
+            fromAccountIds: ['income-guard-5555-5555-555555555555'],
+          },
+        });
+
+        const incomeAccount = createTestAccount({
+          id: 'income-guard-5555-5555-555555555555',
+          name: 'Salary',
+          type: 'income',
+          initialValue: 100_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+        });
+
+        const result = calculateForecast({
+          accounts: [bankAccount, incomeAccount],
+          assumptions: defaultAssumptions,
+          epochs: defaultEpochs,
+          events: [],
+          persons: [],
+          settings: testSettings,
+          startYear: 2025,
+          endYear: 2025,
+        });
+
+        const year = result.years[0];
+        const bankResult = year.accounts.find(a => a.accountId === bankAccount.id)!;
+        const incomeResult = year.accounts.find(a => a.accountId === incomeAccount.id)!;
+
+        expect(bankResult.autoTopupApplied).toBeUndefined();
+        expect(bankResult.endValue).toBe(0);
+        expect(incomeResult.endValue).toBe(100_000);
+      });
+
+      it('does not draw from expense accounts as auto-topup source', () => {
+        const bankAccount = createTestAccount({
+          id: 'bank-guard2-5555-5555-555555555555',
+          name: 'Bank',
+          type: 'asset',
+          initialValue: 0,
+          growthProfile: { type: 'fixed', rate: 0 },
+          autoTopup: {
+            enabled: true,
+            threshold: 10_000,
+            targetBalance: 10_000,
+            fromAccountIds: ['expense-guard-5555-5555-555555555555'],
+          },
+        });
+
+        const expenseAccount = createTestAccount({
+          id: 'expense-guard-5555-5555-555555555555',
+          name: 'Expenses',
+          type: 'expense',
+          initialValue: 50_000,
+          growthProfile: { type: 'fixed', rate: 0 },
+        });
+
+        const result = calculateForecast({
+          accounts: [bankAccount, expenseAccount],
+          assumptions: defaultAssumptions,
+          epochs: defaultEpochs,
+          events: [],
+          persons: [],
+          settings: testSettings,
+          startYear: 2025,
+          endYear: 2025,
+        });
+
+        const year = result.years[0];
+        const bankResult = year.accounts.find(a => a.accountId === bankAccount.id)!;
+
+        expect(bankResult.autoTopupApplied).toBeUndefined();
+        expect(bankResult.endValue).toBe(0);
+      });
+    });
+
     describe('income to expense flow conservation', () => {
       it('salary deposited to bank and expense drawn from bank produces no conservation violation', () => {
         const bankAccount = createTestAccount({
