@@ -1613,13 +1613,6 @@ export function calculateForecast(input: ForecastInput): ForecastResult {
       
       const threshold = account.autoTopup.threshold ?? 0;
       
-      // DEBUG: Log auto-topup check
-      if (year === 2030 && account.id === 'fafeb4f5-2677-47e8-9b3c-f472b1d487a4') {
-        console.log(`DEBUG Auto-topup check for ${account.name} in year ${year}:`);
-        console.log(`  result.endValue=${result.endValue}, threshold=${threshold}`);
-        console.log(`  result.endValue < threshold ? ${result.endValue < threshold}`);
-      }
-      
       if (result.endValue < threshold) {
         const targetBalance = account.autoTopup.targetBalance ?? threshold;
         let topupAmount = targetBalance - result.endValue;
