@@ -1,4 +1,4 @@
-import type { Account, Person, ResolvedAssumptions, GrowthProfile, AccountCondition } from '../schemas';
+import type { Account, AccountYearResult, Person, ResolvedAssumptions, GrowthProfile, AccountCondition, Epoch } from '../schemas';
 
 export function isAccountActive(
   account: Account,
@@ -149,4 +149,28 @@ export function getAccountAcquisitionYear(account: Account, persons: Person[]): 
     return conditionToYear(account.startCondition, owner);
   }
   return new Date().getFullYear();
+}
+
+export function getAccountAssumptionForEpoch(
+  account: Account,
+  year: number,
+  epochs: Epoch[],
+  field: 'growthRate' | 'returnRate'
+): number | undefined {
+  const sortedEpochs = [...epochs].sort((a, b) => a.order - b.order);
+
+  for (let i = sortedEpochs.length - 1; i >= 0; i--) {
+    const epoch = sortedEpochs[i];
+    if (year >= epoch.startYear && year <= epoch.endYear) {
+      const override = epoch.accountAssumptions?.[account.id]?.[field];
+      if (override !== undefined) return override;
+
+      for (let j = i - 1; j >= 0; j--) {
+        const prevOverride = sortedEpochs[j].accountAssumptions?.[account.id]?.[field];
+        if (prevOverride !== undefined) return prevOverride;
+      }
+      break;
+    }
+  }
+  return undefined;
 }

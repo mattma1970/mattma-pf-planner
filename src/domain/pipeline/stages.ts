@@ -21,10 +21,81 @@ import type {
   TaxEvent,
   TaxAggregation,
   OffBalanceSheetItem,
+  TaxByPerson,
 } from '../schemas';
+import type {
+  ContributionProcessingResult,
+} from '../../engine/superContributions';
 
 import type { RuleRegistry } from '../registry';
-import type { AccountId, PersonId, Year, Money } from '../types';
+import type {
+  AccountId,
+  PersonId,
+  Year,
+  Money,
+  RuleId,
+} from '../types';
+
+// ============================================
+// Intermediate state types carried between stages
+// ============================================
+
+export interface LifecycleTransfer {
+  sourceId: AccountId;
+  destinationId: AccountId;
+  amount: Money;
+  endBehavior: 'transfer' | 'sell' | 'sellNoCgt';
+  account: Account;
+}
+
+export interface PendingCgtEvent {
+  accountId: AccountId;
+  accountName: string;
+  cgtResult: {
+    grossCapitalGain: Money;
+    discountApplied: boolean;
+    discountedGain: Money;
+    costBase: Money;
+    saleProceeds: Money;
+  };
+  fundedFromAccountId: AccountId;
+  fundedFromAccountName: string;
+  personId?: PersonId;
+  personName?: string;
+}
+
+export interface LiabilityPayoff {
+  amount: Money;
+  fundedByAccountId: AccountId;
+  triggeredByAssetId: AccountId;
+  triggeredByAssetName: string;
+  liabilityName: string;
+}
+
+export interface SuperContributionFlow {
+  accountId: AccountId;
+  concessional: Money;
+  nonConcessional: Money;
+  preTaxReduction: Money;
+  postTaxDeduction: Money;
+  personId: PersonId;
+}
+
+export interface SuperContributionAccountResult {
+  concessional: Money;
+  nonConcessional: Money;
+  preTaxReduction: Money;
+  postTaxDeduction: Money;
+  personId: PersonId;
+}
+
+export interface ContributionCapResultByPerson {
+  unallowedNonConcessional: Money;
+  totalRequestedNonConcessional: Money;
+  excessConcessional: Money;
+  blockedExcessConcessional: Money;
+  totalRequestedConcessional: Money;
+}
 
 // ============================================
 // Forecast context - flows through the pipeline
@@ -44,29 +115,111 @@ export interface ForecastContext {
   readonly epochs: Epoch[];
   readonly assumptions: Assumptions;
 
-  /** Mutable state accumulated during the pipeline run */
+  /** Current year being processed */
   readonly year: Year;
+
+  /** Mutable account state */
   readonly accountValues: Map<AccountId, Money>;
   readonly priorYearInflows: Map<AccountId, Money>;
   readonly accountStartYears: Map<AccountId, Year>;
 
+  /** Current year account results (built during account processing) */
+  readonly accountResults: Map<AccountId, AccountYearResult>;
+
+  /** Opening values captured at start of current year */
+  readonly openingValues?: Map<AccountId, Money>;
+
   /** Super / cap state (carried across years) */
-  readonly carryForwardStates: Map<PersonId, { personId: PersonId; unusedCaps: { year: Year; amount: Money }[] }>;
-  readonly nonConcessionalCapStates: Map<PersonId, { personId: PersonId; closingBalance: Money }>;
-  readonly capitalLossStates: Map<PersonId, { personId: PersonId; openingBalance: Money; carryForwardBalance: Money }>;
+  readonly carryForwardStates: Map<
+    PersonId,
+    { personId: PersonId; unusedCaps: { year: Year; amount: Money }[] }
+  >;
+  readonly nonConcessionalCapStates: Map<
+    PersonId,
+    { personId: PersonId; closingBalance: Money }
+  >;
+  readonly capitalLossStates: Map<
+    PersonId,
+    { personId: PersonId; openingBalance: Money; carryForwardBalance: Money }
+  >;
+
+  /** Lifecycle transfer state (set by LifecycleTransferStage) */
+  readonly lifecycleTransfers?: LifecycleTransfer[];
+  readonly lifecycleFlows?: Map<AccountId, Money>;
+  readonly pendingCgtEvents?: PendingCgtEvent[];
+  readonly liabilityPayoffs?: Map<AccountId, LiabilityPayoff>;
+
+  /** User transfer state (set by UserTransferStage) */
+  readonly userTransferFlows?: Map<AccountId, Money>;
+  readonly superContributionFlows?: Map<AccountId, Money>;
+  readonly superContributionsByAccount?: Map<AccountId, SuperContributionAccountResult>;
+  readonly contributionCapResultsByPerson?: Map<PersonId, ContributionCapResultByPerson>;
+  readonly contributionProcessingResults?: ContributionProcessingResult[];
 
   /** Output - built up year by year */
   readonly results: YearResult[];
   readonly warnings: ForecastWarning[];
 
+  /** Per-year accumulators */
+  readonly yearWarnings: ForecastWarning[];
+  readonly yearLedgerEntries: Array<{
+    accountId: AccountId;
+    amount: Money;
+    delta: 'credit' | 'debit';
+    kind:
+      | 'externalIn'
+      | 'externalOut'
+      | 'synthetic'
+      | 'internalTransfer';
+    label: string;
+    sourceAccountId?: AccountId;
+    sourceAccountName?: string;
+  }>;
+  readonly deferredLedgerEntries: Array<{
+    accountId: AccountId;
+    amount: Money;
+    delta: 'credit' | 'debit';
+    kind:
+      | 'externalIn'
+      | 'externalOut'
+      | 'synthetic'
+      | 'internalTransfer';
+    label: string;
+    sourceAccountId?: AccountId;
+    sourceAccountName?: string;
+  }>;
+
+  /** Per-year tax accumulators */
+  readonly taxEvents: TaxEvent[];
+  readonly incomeByAccount: Array<{
+    accountId: AccountId;
+    accountName: string;
+    amount: Money;
+    fundedFromAccountId?: AccountId;
+    personId?: PersonId;
+    personName?: string;
+  }>;
+  readonly incomeByPerson: Map<PersonId, Money>;
+  readonly frankingCreditsByPerson: Map<PersonId, Money>;
+
+  /** Year totals */
+  readonly totalIncome: Money;
+  readonly totalExpenses: Money;
+  readonly taxPayable: Money;
+  readonly netPosition: Money;
+
   /** Helpers */
   readonly peakAssets: Money;
   readonly peakAssetsYear: Year;
+
+  /** Resolved assumptions for current year */
+  readonly resolvedAssumptions: { cpi: Money };
 }
 
-/**
- * A single stage in the forecast pipeline.
- */
+// ============================================
+// A single stage in the forecast pipeline
+// ============================================
+
 export interface IForecastStage {
   readonly id: string;
   readonly order: number;
@@ -103,11 +256,18 @@ export class ForecastOrchestrator {
    * Run all registered stages for a single year.
    * Returns the mutated context.
    */
-  async runYear(context: ForecastContext): Promise<ForecastContext> {
+  runYear(context: ForecastContext): ForecastContext {
     let ctx = context;
     for (const stage of this.getStages()) {
       if (!stage.enabled) continue;
-      ctx = await stage.execute(ctx);
+      const result = stage.execute(ctx);
+      ctx = result instanceof Promise ? result : result;
+      // If it's a promise, we need to await - but none of our stages are async
+      // For safety, handle both sync and async
+      if (result instanceof Promise) {
+        throw new Error(`Async stage ${stage.id} not supported in sync runYear`);
+      }
+      ctx = result;
     }
     return ctx;
   }
