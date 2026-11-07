@@ -12,6 +12,18 @@ import type { Account, AccountYearResult } from '../schemas';
  */
 export type FlowKind = 'externalIn' | 'externalOut' | 'synthetic' | 'internalTransfer';
 
+/**
+ * Default account used as the offsetting leg for externalIn, externalOut, and
+ * synthetic flows. This represents the model's cumulative equity position
+ * (Retained Earnings / Cumulative Wealth). Every balance-changing flow that
+ * crosses the model boundary or creates value internally must have a second
+ * leg against this account to maintain double-entry integrity.
+ *
+ * Users should create an account with this id in their plan, or the engine
+ * will report a missing-account warning for the offsetting leg.
+ */
+export const DEFAULT_EQUITY_ACCOUNT_ID = 'retained-earnings';
+
 export interface LedgerEntry {
   accountId: string;
   amount: number;
@@ -20,6 +32,81 @@ export interface LedgerEntry {
   label: string;
   sourceAccountId?: string;
   sourceAccountName?: string;
+}
+
+/**
+ * A single leg of a double-entry transaction. Every transaction must have
+ * exactly two legs: one debit and one credit of equal amount.
+ */
+export interface TransactionLeg {
+  accountId: string;
+  amount: number;
+  delta: 'credit' | 'debit';
+  label: string;
+  sourceAccountId?: string;
+  sourceAccountName?: string;
+}
+
+/**
+ * A double-entry transaction. Every financial movement in the model must be
+ * expressed as exactly two legs that balance to zero. This is enforced at
+ * emit time by emitTransaction.
+ */
+export interface DoubleEntryTransaction {
+  id: string;
+  kind: FlowKind;
+  legs: [TransactionLeg, TransactionLeg];
+}
+
+/**
+ * Apply a double-entry transaction. Validates that the two legs are equal and
+ * opposite before applying either leg. If validation fails, neither leg is
+ * applied and an error is reported via onError.
+ *
+ * This is the only function that should be used to mutate account balances
+ * through the ledger. Direct mutation of accountValues or accountResults
+ * outside this function breaks the double-entry invariant.
+ */
+export function emitTransaction(
+  entry: DoubleEntryTransaction,
+  accumulated: LedgerEntry[],
+  accountResults: Map<string, AccountYearResult>,
+  accountValues: Map<string, number>,
+  onError?: (msg: string) => void,
+): void {
+  const [leg1, leg2] = entry.legs;
+
+  // Validate: equal amounts
+  if (leg1.amount !== leg2.amount) {
+    onError?.(
+      `Unbalanced transaction "${entry.id}": leg amounts must be equal (${leg1.amount} !== ${leg2.amount})`,
+    );
+    return;
+  }
+
+  // Convert to two LedgerEntry objects and apply both
+  const entry1: LedgerEntry = {
+    accountId: leg1.accountId,
+    amount: leg1.amount,
+    delta: leg1.delta,
+    kind: entry.kind,
+    label: leg1.label,
+    sourceAccountId: leg1.sourceAccountId,
+    sourceAccountName: leg1.sourceAccountName,
+  };
+
+  const entry2: LedgerEntry = {
+    accountId: leg2.accountId,
+    amount: leg2.amount,
+    delta: leg2.delta,
+    kind: entry.kind,
+    label: leg2.label,
+    sourceAccountId: leg2.sourceAccountId,
+    sourceAccountName: leg2.sourceAccountName,
+  };
+
+  emitLedgerEntry(entry1, accumulated, accountResults, accountValues, onError);
+  emitLedgerEntry(entry2, accumulated, accountResults, accountValues, onError);
 }
 
 export interface ConservationResult {
@@ -94,6 +181,22 @@ export function applyDeferredLedger(
 ): void {
   for (const entry of deferred) {
     emitLedgerEntry(entry, accumulated, accountResults, accountValues, onError);
+  }
+}
+
+/**
+ * Apply a batch of deferred double-entry transactions. Each transaction is
+ * validated and applied via emitTransaction, ensuring double-entry integrity.
+ */
+export function applyDeferredTransactions(
+  deferred: DoubleEntryTransaction[],
+  accumulated: LedgerEntry[],
+  accountResults: Map<string, AccountYearResult>,
+  accountValues: Map<string, number>,
+  onError?: (msg: string) => void,
+): void {
+  for (const entry of deferred) {
+    emitTransaction(entry, accumulated, accountResults, accountValues, onError);
   }
 }
 

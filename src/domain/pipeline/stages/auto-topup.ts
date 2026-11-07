@@ -12,7 +12,11 @@ import type {
 
 import type { ForecastContext, IForecastStage } from './stages';
 import type { Money, AccountId } from '../../types';
-import { emitLedgerEntry } from '../../../engine/ledger';
+import {
+  emitTransaction,
+  type DoubleEntryTransaction,
+} from '../../../engine/ledger';
+import { v4 as uuidv4 } from 'uuid';
 
 export class AutoTopupStage implements IForecastStage {
   readonly id = 'auto-topup';
@@ -56,30 +60,30 @@ export class AutoTopupStage implements IForecastStage {
             (a) => a.id === account.autoTopup!.fromAccountId
           );
 
-          emitLedgerEntry(
+          // Double-entry: debit source account (cash leaves), credit target
+          // account (cash arrives). Both legs balance; net worth unchanged.
+          emitTransaction(
             {
-              accountId: account.autoTopup!.fromAccountId,
-              amount: topupAmount,
-              delta: 'debit',
+              id: uuidv4(),
               kind: 'internalTransfer',
-              label: `Auto top-up to: ${account.name}`,
-              sourceAccountId: account.id,
-              sourceAccountName: account.name,
-            },
-            newLedgerEntries,
-            accountResults,
-            accountValues,
-            onError
-          );
-          emitLedgerEntry(
-            {
-              accountId: account.id,
-              amount: topupAmount,
-              delta: 'credit',
-              kind: 'internalTransfer',
-              label: `Auto top-up from: ${sourceAccount?.name ?? 'Unknown'}`,
-              sourceAccountId: account.autoTopup!.fromAccountId,
-              sourceAccountName: sourceAccount?.name,
+              legs: [
+                {
+                  accountId: account.autoTopup!.fromAccountId,
+                  amount: topupAmount,
+                  delta: 'debit',
+                  label: `Auto top-up to: ${account.name}`,
+                  sourceAccountId: account.id,
+                  sourceAccountName: account.name,
+                },
+                {
+                  accountId: account.id,
+                  amount: topupAmount,
+                  delta: 'credit',
+                  label: `Auto top-up from: ${sourceAccount?.name ?? 'Unknown'}`,
+                  sourceAccountId: account.autoTopup!.fromAccountId,
+                  sourceAccountName: sourceAccount?.name,
+                },
+              ],
             },
             newLedgerEntries,
             accountResults,

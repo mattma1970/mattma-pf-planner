@@ -35,6 +35,7 @@ import type {
   Money,
   RuleId,
 } from '../types';
+import type { DoubleEntryTransaction } from '../../engine/ledger';
 
 // ============================================
 // Intermediate state types carried between stages
@@ -175,19 +176,7 @@ export interface ForecastContext {
     sourceAccountId?: AccountId;
     sourceAccountName?: string;
   }>;
-  readonly deferredLedgerEntries: Array<{
-    accountId: AccountId;
-    amount: Money;
-    delta: 'credit' | 'debit';
-    kind:
-      | 'externalIn'
-      | 'externalOut'
-      | 'synthetic'
-      | 'internalTransfer';
-    label: string;
-    sourceAccountId?: AccountId;
-    sourceAccountName?: string;
-  }>;
+  readonly deferredLedgerEntries: DoubleEntryTransaction[];
 
   /** Per-year tax accumulators */
   readonly taxEvents: TaxEvent[];

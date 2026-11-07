@@ -16,7 +16,13 @@ import type {
   AccountYearResult,
 } from './stages';
 import type { Year, Money, AccountId } from '../../types';
-import { emitLedgerEntry } from '../../../engine/ledger';
+import {
+  emitLedgerEntry,
+  emitTransaction,
+  type DoubleEntryTransaction,
+  DEFAULT_EQUITY_ACCOUNT_ID,
+} from '../../../engine/ledger';
+import { v4 as uuidv4 } from 'uuid';
 
 export class LiabilityStage implements IForecastStage {
   readonly id = 'liability';
@@ -52,24 +58,37 @@ export class LiabilityStage implements IForecastStage {
 
       const payoffInfo = liabilityPayoffs?.get(account.id);
       if (payoffInfo) {
-        emitLedgerEntry(
+        // Double-entry: debit funding account (cash leaves), debit liability
+        // account (liability extinguished). Both balances decrease; net worth
+        // is unchanged (asset down, liability down).
+        emitTransaction(
           {
-            accountId: payoffInfo.fundedByAccountId,
-            amount: payoffInfo.amount,
-            delta: 'debit',
+            id: uuidv4(),
             kind: 'internalTransfer',
-            label: `Payoff: ${payoffInfo.liabilityName}`,
-            sourceAccountId: account.id,
-            sourceAccountName: payoffInfo.liabilityName,
+            legs: [
+              {
+                accountId: payoffInfo.fundedByAccountId,
+                amount: payoffInfo.amount,
+                delta: 'debit',
+                label: `Payoff: ${payoffInfo.liabilityName}`,
+                sourceAccountId: account.id,
+                sourceAccountName: payoffInfo.liabilityName,
+              },
+              {
+                accountId: account.id,
+                amount: payoffInfo.amount,
+                delta: 'debit',
+                label: `Payoff: ${payoffInfo.liabilityName}`,
+                sourceAccountId: payoffInfo.fundedByAccountId,
+                sourceAccountName: 'Funding account',
+              },
+            ],
           },
           newLedgerEntries,
           accountResults,
           accountValues,
           onError
         );
-        result.withdrawals = payoffInfo.amount;
-        result.endValue = 0;
-        accountValues.set(account.id, 0);
         continue;
       }
 
@@ -135,15 +154,31 @@ export class LiabilityStage implements IForecastStage {
       accountValues.set(account.id, result.endValue);
 
       if (account.fundedByAccountId && paymentAmount > 0) {
-        emitLedgerEntry(
+        // Double-entry: debit funding account (cash leaves model), debit
+        // Retained Earnings (equity reduced by the payment). Both balances
+        // decrease; net worth falls by the payment amount.
+        emitTransaction(
           {
-            accountId: account.fundedByAccountId,
-            amount: paymentAmount,
-            delta: 'debit',
+            id: uuidv4(),
             kind: 'externalOut',
-            label: `Liability payment: ${account.name}`,
-            sourceAccountId: account.id,
-            sourceAccountName: account.name,
+            legs: [
+              {
+                accountId: account.fundedByAccountId,
+                amount: paymentAmount,
+                delta: 'debit',
+                label: `Liability payment: ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+              {
+                accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                amount: paymentAmount,
+                delta: 'debit',
+                label: `Liability payment: ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+            ],
           },
           newLedgerEntries,
           accountResults,

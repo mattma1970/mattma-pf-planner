@@ -24,9 +24,11 @@ import type { Year, Money, AccountId, PersonId } from '../../types';
 import { isAccountActive } from '../../../engine/accounts';
 import { getAccountAssumptionForEpoch } from '../../../engine/accounts';
 import {
-  emitLedgerEntry,
-  applyDeferredLedger,
+  applyDeferredTransactions,
+  type DoubleEntryTransaction,
+  DEFAULT_EQUITY_ACCOUNT_ID,
 } from '../../../engine/ledger';
+import { v4 as uuidv4 } from 'uuid';
 
 export class DerivedFlowsStage implements IForecastStage {
   readonly id = 'derived-flows';
@@ -122,58 +124,109 @@ export class DerivedFlowsStage implements IForecastStage {
           }
           superContributionsByAccount.set(config.targetSuperAccountId, existing);
 
+          // Double-entry: credit target super account (money arrives), credit
+          // Retained Earnings (value enters model). Both balances increase.
           newDeferredEntries.push({
-            accountId: config.targetSuperAccountId,
-            amount: totalIncomeValue,
-            delta: 'credit',
+            id: uuidv4(),
             kind: 'externalIn',
-            label: `${config.source === 'employerSG' ? 'Employer SG' : config.source}: ${account.name}`,
-            sourceAccountId: account.id,
-            sourceAccountName: account.name,
+            legs: [
+              {
+                accountId: config.targetSuperAccountId,
+                amount: totalIncomeValue,
+                delta: 'credit',
+                label: `${config.source === 'employerSG' ? 'Employer SG' : config.source}: ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+              {
+                accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                amount: totalIncomeValue,
+                delta: 'credit',
+                label: `${config.source === 'employerSG' ? 'Employer SG' : config.source}: ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+            ],
           });
         } else if (totalIncomeValue > 0) {
           if (account.drawnFromAccountId && account.depositsToAccountId) {
+            // Double-entry: debit drawnFrom account (cash leaves), credit
+            // depositsTo account (cash arrives). Internal transfer.
             newDeferredEntries.push({
-              accountId: account.drawnFromAccountId,
-              amount: totalIncomeValue,
-              delta: 'debit',
+              id: uuidv4(),
               kind: 'internalTransfer',
-              label: `Drawdown source: ${account.name}`,
-              sourceAccountId: account.id,
-              sourceAccountName: account.name,
-            });
-            newDeferredEntries.push({
-              accountId: account.depositsToAccountId,
-              amount: totalIncomeValue,
-              delta: 'credit',
-              kind: 'internalTransfer',
-              label: `Drawdown: ${account.name}`,
-              sourceAccountId: account.id,
-              sourceAccountName: account.name,
+              legs: [
+                {
+                  accountId: account.drawnFromAccountId,
+                  amount: totalIncomeValue,
+                  delta: 'debit',
+                  label: `Drawdown source: ${account.name}`,
+                  sourceAccountId: account.id,
+                  sourceAccountName: account.name,
+                },
+                {
+                  accountId: account.depositsToAccountId,
+                  amount: totalIncomeValue,
+                  delta: 'credit',
+                  label: `Drawdown: ${account.name}`,
+                  sourceAccountId: account.id,
+                  sourceAccountName: account.name,
+                },
+              ],
             });
           } else if (account.depositsToAccountId) {
+            // Double-entry: credit depositsTo account (money arrives), credit
+            // Retained Earnings (value enters model).
             newDeferredEntries.push({
-              accountId: account.depositsToAccountId,
-              amount: totalIncomeValue,
-              delta: 'credit',
+              id: uuidv4(),
               kind: 'externalIn',
-              label: `Income: ${account.name}`,
-              sourceAccountId: account.id,
-              sourceAccountName: account.name,
+              legs: [
+                {
+                  accountId: account.depositsToAccountId,
+                  amount: totalIncomeValue,
+                  delta: 'credit',
+                  label: `Income: ${account.name}`,
+                  sourceAccountId: account.id,
+                  sourceAccountName: account.name,
+                },
+                {
+                  accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                  amount: totalIncomeValue,
+                  delta: 'credit',
+                  label: `Income: ${account.name}`,
+                  sourceAccountId: account.id,
+                  sourceAccountName: account.name,
+                },
+              ],
             });
           }
         }
       }
 
       if (account.type === 'expense' && account.fundedByAccountId) {
+        // Double-entry: debit fundedBy account (cash leaves), debit Retained
+        // Earnings (equity reduced by expense).
         newDeferredEntries.push({
-          accountId: account.fundedByAccountId,
-          amount: result.endValue, // projectedValue for expense
-          delta: 'debit',
+          id: uuidv4(),
           kind: 'externalOut',
-          label: `Expense: ${account.name}`,
-          sourceAccountId: account.id,
-          sourceAccountName: account.name,
+          legs: [
+            {
+              accountId: account.fundedByAccountId,
+              amount: result.endValue, // projectedValue for expense
+              delta: 'debit',
+              label: `Expense: ${account.name}`,
+              sourceAccountId: account.id,
+              sourceAccountName: account.name,
+            },
+            {
+              accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+              amount: result.endValue,
+              delta: 'debit',
+              label: `Expense: ${account.name}`,
+              sourceAccountId: account.id,
+              sourceAccountName: account.name,
+            },
+          ],
         });
       }
 
@@ -206,14 +259,29 @@ export class DerivedFlowsStage implements IForecastStage {
             // frankingCreditsByPerson is updated in context
           }
 
+          // Double-entry: credit incomeTarget account (value arrives), credit
+          // Retained Earnings (synthetic value created).
           newDeferredEntries.push({
-            accountId: account.incomeTargetAccountId,
-            amount: grossedUpReturn,
-            delta: 'credit',
+            id: uuidv4(),
             kind: 'synthetic',
-            label: `Return: ${account.name}`,
-            sourceAccountId: account.id,
-            sourceAccountName: account.name,
+            legs: [
+              {
+                accountId: account.incomeTargetAccountId,
+                amount: grossedUpReturn,
+                delta: 'credit',
+                label: `Return: ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+              {
+                accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                amount: grossedUpReturn,
+                delta: 'credit',
+                label: `Return: ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+            ],
           });
         }
       }
@@ -228,14 +296,29 @@ export class DerivedFlowsStage implements IForecastStage {
           fundingAmount += account.initialValue;
         }
         if (fundingAmount > 0) {
+          // Double-entry: debit fundedBy account (cash leaves), credit asset
+          // account (asset acquired). Internal transfer.
           newDeferredEntries.push({
-            accountId: account.fundedByAccountId,
-            amount: fundingAmount,
-            delta: 'debit',
+            id: uuidv4(),
             kind: 'internalTransfer',
-            label: `Fund asset: ${account.name}`,
-            sourceAccountId: account.id,
-            sourceAccountName: account.name,
+            legs: [
+              {
+                accountId: account.fundedByAccountId,
+                amount: fundingAmount,
+                delta: 'debit',
+                label: `Fund asset: ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+              {
+                accountId: account.id,
+                amount: fundingAmount,
+                delta: 'credit',
+                label: `Fund asset: ${account.name}`,
+                sourceAccountId: account.fundedByAccountId,
+                sourceAccountName: 'Funding account',
+              },
+            ],
           });
         }
       }
@@ -247,14 +330,29 @@ export class DerivedFlowsStage implements IForecastStage {
           account.depositsToAccountId &&
           account.endBehavior === 'hold'
         ) {
+          // Double-entry: credit depositsTo account (money arrives), credit
+          // Retained Earnings (value enters model).
           newDeferredEntries.push({
-            accountId: account.depositsToAccountId,
-            amount: result.endValue,
-            delta: 'credit',
+            id: uuidv4(),
             kind: 'externalIn',
-            label: `Income (held): ${account.name}`,
-            sourceAccountId: account.id,
-            sourceAccountName: account.name,
+            legs: [
+              {
+                accountId: account.depositsToAccountId,
+                amount: result.endValue,
+                delta: 'credit',
+                label: `Income (held): ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+              {
+                accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                amount: result.endValue,
+                delta: 'credit',
+                label: `Income (held): ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+            ],
           });
         }
         if (
@@ -262,21 +360,36 @@ export class DerivedFlowsStage implements IForecastStage {
           account.fundedByAccountId &&
           account.endBehavior === 'hold'
         ) {
+          // Double-entry: debit fundedBy account (cash leaves), debit Retained
+          // Earnings (equity reduced by expense).
           newDeferredEntries.push({
-            accountId: account.fundedByAccountId,
-            amount: result.endValue,
-            delta: 'debit',
+            id: uuidv4(),
             kind: 'externalOut',
-            label: `Expense (held): ${account.name}`,
-            sourceAccountId: account.id,
-            sourceAccountName: account.name,
+            legs: [
+              {
+                accountId: account.fundedByAccountId,
+                amount: result.endValue,
+                delta: 'debit',
+                label: `Expense (held): ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+              {
+                accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                amount: result.endValue,
+                delta: 'debit',
+                label: `Expense (held): ${account.name}`,
+                sourceAccountId: account.id,
+                sourceAccountName: account.name,
+              },
+            ],
           });
         }
       }
     }
 
     // Apply deferred ledger entries
-    applyDeferredLedger(
+    applyDeferredTransactions(
       newDeferredEntries,
       newLedgerEntries,
       accountResults,

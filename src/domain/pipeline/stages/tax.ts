@@ -28,7 +28,12 @@ import {
   calculateCapitalGain,
 } from '../../../engine/tax';
 import { calculateDiv293 } from '../../../engine/taxRules';
-import { emitLedgerEntry } from '../../../engine/ledger';
+import {
+  emitLedgerEntry,
+  emitTransaction,
+  type DoubleEntryTransaction,
+  DEFAULT_EQUITY_ACCOUNT_ID,
+} from '../../../engine/ledger';
 import {
   processPersonContributions,
   type ContributionProcessingResult,
@@ -297,13 +302,26 @@ export class TaxStage implements IForecastStage {
 
         // Deduct 15% contributions tax from super account
         if (result.contributionsTax > 0) {
-          emitLedgerEntry(
+          // Double-entry: debit super account (cash leaves), debit Retained
+          // Earnings (equity reduced by tax). Both balances decrease.
+          emitTransaction(
             {
-              accountId: superAccountId,
-              amount: result.contributionsTax,
-              delta: 'debit',
+              id: uuidv4(),
               kind: 'externalOut',
-              label: 'Super contributions tax (15%)',
+              legs: [
+                {
+                  accountId: superAccountId,
+                  amount: result.contributionsTax,
+                  delta: 'debit',
+                  label: 'Super contributions tax (15%)',
+                },
+                {
+                  accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                  amount: result.contributionsTax,
+                  delta: 'debit',
+                  label: 'Super contributions tax (15%)',
+                },
+              ],
             },
             newLedgerEntries,
             accountResults,
@@ -411,13 +429,26 @@ export class TaxStage implements IForecastStage {
           const div293FundingAccount =
             accounts.find((a) => a.id === div293FundingAccountId) ?? superAccount;
 
-          emitLedgerEntry(
+          // Double-entry: debit funding account (cash leaves), debit Retained
+          // Earnings (equity reduced by tax).
+          emitTransaction(
             {
-              accountId: div293FundingAccountId,
-              amount: div293Result.taxAmount,
-              delta: 'debit',
+              id: uuidv4(),
               kind: 'externalOut',
-              label: 'Division 293 tax',
+              legs: [
+                {
+                  accountId: div293FundingAccountId,
+                  amount: div293Result.taxAmount,
+                  delta: 'debit',
+                  label: 'Division 293 tax',
+                },
+                {
+                  accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                  amount: div293Result.taxAmount,
+                  delta: 'debit',
+                  label: 'Division 293 tax',
+                },
+              ],
             },
             newLedgerEntries,
             accountResults,
@@ -526,13 +557,26 @@ export class TaxStage implements IForecastStage {
     // 7. Deduct tax from funding account
     for (const agg of taxAggregations) {
       if (agg.fundedFromAccountId !== 'unassigned') {
-        emitLedgerEntry(
+        // Double-entry: debit funding account (cash leaves), debit Retained
+        // Earnings (equity reduced by tax).
+        emitTransaction(
           {
-            accountId: agg.fundedFromAccountId,
-            amount: agg.calculatedTax,
-            delta: 'debit',
+            id: uuidv4(),
             kind: 'externalOut',
-            label: `Tax payment (${agg.taxSchedule === 'flatRate15' ? '15% flat' : 'marginal rates'})`,
+            legs: [
+              {
+                accountId: agg.fundedFromAccountId,
+                amount: agg.calculatedTax,
+                delta: 'debit',
+                label: `Tax payment (${agg.taxSchedule === 'flatRate15' ? '15% flat' : 'marginal rates'})`,
+              },
+              {
+                accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                amount: agg.calculatedTax,
+                delta: 'debit',
+                label: `Tax payment (${agg.taxSchedule === 'flatRate15' ? '15% flat' : 'marginal rates'})`,
+              },
+            ],
           },
           newLedgerEntries,
           accountResults,
