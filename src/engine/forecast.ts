@@ -34,6 +34,7 @@ import {
   initializeNonConcessionalCapStatesFromAccounts,
 } from './superContributions';
 import { defaultRuleRegistry } from '../domain/registry';
+import { DEFAULT_EQUITY_ACCOUNT_ID } from './ledger';
 import {
   ForecastOrchestrator,
   STAGE_IDS,
@@ -95,7 +96,6 @@ function buildInitialContext(
   rules: typeof defaultRuleRegistry
 ): ForecastContext {
   const {
-    accounts,
     assumptions,
     epochs,
     events,
@@ -104,6 +104,33 @@ function buildInitialContext(
     startYear,
     endYear,
   } = input;
+
+  // Ensure the Retained Earnings account exists. It is the universal offsetting
+  // account for every externalIn, externalOut, and synthetic flow — every
+  // balance-changing transaction that crosses the model boundary or creates
+  // value internally must have a second leg against this account to maintain
+  // double-entry integrity. It is excluded from net worth because it IS the
+  // cumulative net worth position, not a separate asset.
+  const equityAccountId = DEFAULT_EQUITY_ACCOUNT_ID;
+  const hasEquityAccount = input.accounts.some((a) => a.id === equityAccountId);
+  const accounts = hasEquityAccount
+    ? input.accounts
+    : [
+        ...input.accounts,
+        {
+          id: equityAccountId,
+          name: 'Retained Earnings',
+          type: 'asset',
+          category: 'taxCap',
+          includeInNetWorth: false,
+          owner: 'unassigned',
+          initialValue: 0,
+          growthProfile: { type: 'fixed', rate: 0 },
+        },
+      ];
+
+  accountValues.set(equityAccountId, 0);
+  priorYearInflows.set(equityAccountId, 0);
 
   return {
     startYear,
