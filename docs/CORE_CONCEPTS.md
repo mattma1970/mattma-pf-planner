@@ -74,6 +74,63 @@ If this fails, the year shows a `conservationViolation` warning. This is your gu
 
 > **For users:** If you see a conservation warning, one side of a transfer was emitted without its matching credit or debit. This is usually a configuration error (e.g., a `drawnFromAccountId` pointing to a deleted account).
 
+### Double-entry diagram
+
+Every transaction flows through `emitTransaction()` and must produce exactly two balanced legs:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Double-Entry Transaction (emitTransaction)                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Leg 1                      Leg 2                               │
+│  ┌─────────┐              ┌─────────┐                          │
+│  │ Account │              │ Account │                          │
+│  │   A     │              │   B     │                          │
+│  └────┬────┘              └────┬────┘                          │
+│       │                      │                                 │
+│  debit ───────────────►   credit                              │
+│  amount: $X               amount: $X                            │
+│       │                      │                                 │
+│  ┌────┴────┐              ┌────┴────┐                          │
+│  │ balance │              │ balance │                          │
+│  │ changes │              │ changes │                          │
+│  └─────────┘              └─────────┘                          │
+│                                                                 │
+│  Validation: leg1.amount === leg2.amount                        │
+│  Validation: leg1.delta !== leg2.delta (usually)                │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Flow-kind diagram: how each kind maps to two legs
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Flow kind   │ Leg 1 (debit)      │ Leg 2 (credit)      │ Net worth Δ   │
+├─────────────────────────────────────────────────────────────────────────┤
+│ externalIn  │ Receiving account  │ Retained Earnings   │ +X            │
+│             │   (credit)         │   (credit)          │               │
+│             │                    │                     │               │
+│ externalOut │ Paying account     │ Retained Earnings   │ -X            │
+│             │   (debit)          │   (debit)           │               │
+│             │                    │                     │               │
+│ synthetic   │ Appreciating acct  │ Retained Earnings   │ +X            │
+│             │   (credit)         │   (credit)          │               │
+│             │                    │                     │               │
+│ internalXfer│ Source account     │ Destination account │ 0             │
+│             │   (debit)          │   (credit)          │               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Retained Earnings (`retained-earnings`)** is the universal offsetting account. It absorbs every boundary crossing and synthetic value creation. It represents the cumulative sum of all net worth changes inside the model:
+
+```
+Retained Earnings = Σ(all externalIn) − Σ(all externalOut) + Σ(all synthetic)
+```
+
+> **For users:** You don't need to manage Retained Earnings directly. Create an account with ID `retained-earnings` in your plan, and the engine will use it automatically as the offsetting leg for every boundary-crossing flow. Hide it from the main spreadsheet if you prefer — it's an accounting integrity account, not a spending account.
+
 ---
 
 ## 4. Account Lifecycle
