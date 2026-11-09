@@ -34,7 +34,7 @@ import {
   initializeNonConcessionalCapStatesFromAccounts,
 } from './superContributions';
 import { defaultRuleRegistry } from '../domain/registry';
-import { DEFAULT_EQUITY_ACCOUNT_ID } from './ledger';
+import { DEFAULT_EQUITY_ACCOUNT_ID, emitAccountChange } from './ledger';
 import {
   ForecastOrchestrator,
   STAGE_IDS,
@@ -129,8 +129,33 @@ function buildInitialContext(
         },
       ];
 
-  accountValues.set(equityAccountId, 0);
+  // Only seed the equity account on the first year; on subsequent years its
+  // balance carries forward from the previous year's closing value (just like
+  // any other asset account). Resetting to 0 every year would destroy the
+  // accumulated retained earnings balance.
+  if (!accountValues.has(equityAccountId)) {
+    accountValues.set(equityAccountId, 0);
+  }
   priorYearInflows.set(equityAccountId, 0);
+
+  // Pre-populate accountResults so that ledger entries in early pipeline
+  // stages (e.g. LifecycleTransferStage) can find and modify accounts before
+  // GrowthStage creates the final per-year results.
+  const accountResultsMap = new Map<AccountId, AccountYearResult>();
+  for (const account of accounts) {
+    const openingValue = accountValues.get(account.id) ?? account.initialValue;
+    accountResultsMap.set(account.id, {
+      accountId: account.id,
+      accountType: account.type,
+      year,
+      startValue: openingValue,
+      growth: 0,
+      contributions: 0,
+      withdrawals: 0,
+      transfers: 0,
+      endValue: openingValue,
+    });
+  }
 
   return {
     startYear,
@@ -146,7 +171,7 @@ function buildInitialContext(
     accountValues,
     priorYearInflows,
     accountStartYears,
-    accountResults: new Map(),
+    accountResults: accountResultsMap,
     openingValues: new Map(),
     carryForwardStates,
     nonConcessionalCapStates,
@@ -157,8 +182,7 @@ function buildInitialContext(
     liabilityPayoffs: undefined,
     userTransferFlows: undefined,
     superContributionFlows: undefined,
-    superContributionsByAccount: undefined,
-    contributionCapResultsByPerson: undefined,
+    superContributionsByAccount: new Map(),
     contributionProcessingResults: [],
     results: [],
     warnings: [],
@@ -203,6 +227,7 @@ function buildYearResult(
     taxByPerson,
     netPosition,
     offBalanceSheet,
+    warnings,
   } = extractYearTotals(context, accounts, persons, settings, year);
 
   return {

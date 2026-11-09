@@ -1,7 +1,8 @@
 /**
- * LiabilityStage - Phase 6 of the forecast pipeline.
+ * LiabilityStage - Phase 5 of the forecast pipeline.
  *
- * Handles liability interest and payment processing.
+ * Handles liability interest and payment processing using double-entry
+ * ledger entries.
  */
 
 import type {
@@ -17,9 +18,7 @@ import type {
 } from './stages';
 import type { Year, Money, AccountId } from '../../types';
 import {
-  emitLedgerEntry,
-  emitTransaction,
-  type DoubleEntryTransaction,
+  emitAccountChange,
   DEFAULT_EQUITY_ACCOUNT_ID,
 } from '../../../engine/ledger';
 import { v4 as uuidv4 } from 'uuid';
@@ -58,37 +57,36 @@ export class LiabilityStage implements IForecastStage {
 
       const payoffInfo = liabilityPayoffs?.get(account.id);
       if (payoffInfo) {
-        // Double-entry: debit funding account (cash leaves), debit liability
-        // account (liability extinguished). Both balances decrease; net worth
-        // is unchanged (asset down, liability down).
-        emitTransaction(
-          {
-            id: uuidv4(),
-            kind: 'internalTransfer',
-            legs: [
-              {
-                accountId: payoffInfo.fundedByAccountId,
-                amount: payoffInfo.amount,
-                delta: 'debit',
-                label: `Payoff: ${payoffInfo.liabilityName}`,
-                sourceAccountId: account.id,
-                sourceAccountName: payoffInfo.liabilityName,
-              },
-              {
-                accountId: account.id,
-                amount: payoffInfo.amount,
-                delta: 'debit',
-                label: `Payoff: ${payoffInfo.liabilityName}`,
-                sourceAccountId: payoffInfo.fundedByAccountId,
-                sourceAccountName: 'Funding account',
-              },
-            ],
-          },
-          newLedgerEntries,
-          accountResults,
-          accountValues,
-          onError
-        );
+        const fundingAccount = accounts.find((a) => a.id === payoffInfo.fundedByAccountId);
+        if (fundingAccount) {
+          emitAccountChange(
+            payoffInfo.fundedByAccountId,
+            payoffInfo.amount,
+            'decrease',
+            'internalTransfer',
+            `Payoff: ${payoffInfo.liabilityName}`,
+            payoffInfo.fundedByAccountId,
+            payoffInfo.liabilityName,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
+          emitAccountChange(
+            account.id,
+            payoffInfo.amount,
+            'decrease',
+            'internalTransfer',
+            `Payoff: ${payoffInfo.liabilityName}`,
+            account.id,
+            payoffInfo.liabilityName,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
+        }
+        result.endValue = 0;
         continue;
       }
 
@@ -106,6 +104,36 @@ export class LiabilityStage implements IForecastStage {
       }
 
       const interestAmount = effectiveBalance * interestRate;
+
+      if (interestAmount !== 0) {
+        emitAccountChange(
+          DEFAULT_EQUITY_ACCOUNT_ID,
+          interestAmount,
+          'decrease',
+          'synthetic',
+          `Interest: ${account.name}`,
+          account.id,
+          account.name,
+          newLedgerEntries,
+          accountResults,
+          accountValues,
+          onError
+        );
+        emitAccountChange(
+          account.id,
+          interestAmount,
+          'increase',
+          'synthetic',
+          `Interest: ${account.name}`,
+          account.id,
+          account.name,
+          newLedgerEntries,
+          accountResults,
+          accountValues,
+          onError
+        );
+        result.growth += interestAmount;
+      }
 
       let paymentAmount = account.annualPayment ?? 0;
 
@@ -143,49 +171,42 @@ export class LiabilityStage implements IForecastStage {
       const principalReduction =
         account.paymentType === 'interestOnly' ? 0 : Math.max(0, paymentAmount - interestAmount);
 
-      result.growth = interestAmount;
+      if (paymentAmount > 0) {
+        const fundingAccount = accounts.find((a) => a.id === account.fundedByAccountId);
+        if (fundingAccount) {
+          emitAccountChange(
+            account.id,
+            paymentAmount,
+            'decrease',
+            'internalTransfer',
+            `Liability payment: ${account.name}`,
+            account.id,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
+          emitAccountChange(
+            account.fundedByAccountId,
+            paymentAmount,
+            'decrease',
+            'internalTransfer',
+            `Liability payment: ${account.name}`,
+            account.id,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
+        }
+      }
+
+      // result.endValue has already been updated by emitLedgerEntry above
+      // Track principal reduction as withdrawals (not total payment including interest)
       result.withdrawals = principalReduction;
-
-      if (account.paymentType === 'interestOnly') {
-        result.endValue = result.endValue;
-      } else {
-        result.endValue = Math.max(0, result.endValue + interestAmount - paymentAmount);
-      }
       accountValues.set(account.id, result.endValue);
-
-      if (account.fundedByAccountId && paymentAmount > 0) {
-        // Double-entry: debit funding account (cash leaves model), debit
-        // Retained Earnings (equity reduced by the payment). Both balances
-        // decrease; net worth falls by the payment amount.
-        emitTransaction(
-          {
-            id: uuidv4(),
-            kind: 'externalOut',
-            legs: [
-              {
-                accountId: account.fundedByAccountId,
-                amount: paymentAmount,
-                delta: 'debit',
-                label: `Liability payment: ${account.name}`,
-                sourceAccountId: account.id,
-                sourceAccountName: account.name,
-              },
-              {
-                accountId: DEFAULT_EQUITY_ACCOUNT_ID,
-                amount: paymentAmount,
-                delta: 'debit',
-                label: `Liability payment: ${account.name}`,
-                sourceAccountId: account.id,
-                sourceAccountName: account.name,
-              },
-            ],
-          },
-          newLedgerEntries,
-          accountResults,
-          accountValues,
-          onError
-        );
-      }
     }
 
     return {

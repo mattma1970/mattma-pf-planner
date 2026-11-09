@@ -302,8 +302,8 @@ export class TaxStage implements IForecastStage {
 
         // Deduct 15% contributions tax from super account
         if (result.contributionsTax > 0) {
-          // Double-entry: debit super account (cash leaves), debit Retained
-          // Earnings (equity reduced by tax). Both balances decrease.
+          // Double-entry: credit super account (cash leaves, balance decreases),
+          // credit Retained Earnings (equity reduced by tax). Both balances decrease.
           emitTransaction(
             {
               id: uuidv4(),
@@ -312,13 +312,13 @@ export class TaxStage implements IForecastStage {
                 {
                   accountId: superAccountId,
                   amount: result.contributionsTax,
-                  delta: 'debit',
+                  delta: 'credit',
                   label: 'Super contributions tax (15%)',
                 },
                 {
                   accountId: DEFAULT_EQUITY_ACCOUNT_ID,
                   amount: result.contributionsTax,
-                  delta: 'debit',
+                  delta: 'credit',
                   label: 'Super contributions tax (15%)',
                 },
               ],

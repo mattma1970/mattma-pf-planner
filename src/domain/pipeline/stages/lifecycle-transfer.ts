@@ -1,11 +1,9 @@
 /**
- * LifecycleTransferStage - Phases 1 & 2 of the forecast pipeline.
+ * LifecycleTransferStage - Phase 1 of the forecast pipeline.
  *
- * Phase 1: Calculate opening balances and identify lifecycle transfers
- * Phase 2: Apply lifecycle transfers (sell/transfer from endBehavior)
- *
- * These happen FIRST so proceeds from ending accounts are available
- * for user transfers in the next stage.
+ * Detects accounts ending this year (endBehavior: transfer/sell/sellNoCgt)
+ * and emits double-entry ledger transfers. Proceeds are available for
+ * user transfers in the next stage.
  */
 
 import type {
@@ -16,7 +14,7 @@ import type {
   ForecastWarning,
 } from '../../schemas';
 
-import type { ForecastContext, IForecastStage, LifecycleTransfer, PendingCgtEvent } from './stages';
+import type { ForecastContext, IForecastStage, PendingCgtEvent } from './stages';
 import type { Year, Money, AccountId, PersonId } from '../../types';
 import {
   isAccountActive,
@@ -24,10 +22,16 @@ import {
   getAccountAcquisitionYear,
 } from '../../../engine/accounts';
 import { calculateCapitalGain } from '../../../engine/tax';
+import {
+  emitTransaction,
+  type DoubleEntryTransaction,
+  DEFAULT_EQUITY_ACCOUNT_ID,
+} from '../../../engine/ledger';
+import { v4 as uuidv4 } from 'uuid';
 
 export class LifecycleTransferStage implements IForecastStage {
   readonly id = 'lifecycle-transfer';
-  readonly order = 1;
+  readonly order = 3;
   readonly enabled = true;
 
   execute(context: ForecastContext): ForecastContext {
@@ -38,7 +42,17 @@ export class LifecycleTransferStage implements IForecastStage {
       settings,
       accountValues,
       accountStartYears,
+      yearLedgerEntries,
     } = context;
+
+    const newLedgerEntries = [...(yearLedgerEntries ?? [])];
+    const onError = (msg: string) => {
+      context.yearWarnings.push({
+        type: 'ledgerError',
+        severity: 'error',
+        message: msg,
+      });
+    };
 
     // Capture opening values for all accounts at the start of the year
     const openingValues = new Map<AccountId, Money>();
@@ -55,7 +69,13 @@ export class LifecycleTransferStage implements IForecastStage {
     }
 
     // First pass: determine which accounts are ending and their transfer amounts
-    const lifecycleTransfers: LifecycleTransfer[] = [];
+    const lifecycleTransfers: Array<{
+      sourceId: AccountId;
+      destinationId: AccountId;
+      amount: Money;
+      endBehavior: 'transfer' | 'sell' | 'sellNoCgt';
+      account: Account;
+    }> = [];
 
     for (const account of accounts) {
       const isActive = isAccountActive(account, year, persons);
@@ -68,7 +88,7 @@ export class LifecycleTransferStage implements IForecastStage {
 
       const openingValue = isFirstActiveYear
         ? account.initialValue
-        : account.type === 'income' || account.type === 'expense'
+        : account.type === 'income'
           ? 0
           : (accountValues.get(account.id) ?? account.initialValue);
 
@@ -95,20 +115,81 @@ export class LifecycleTransferStage implements IForecastStage {
       }
     }
 
-    // Apply lifecycle transfers
-    const lifecycleFlows = new Map<AccountId, Money>();
+    // Emit double-entry transfers
     const pendingCgtEvents: PendingCgtEvent[] = [];
 
     for (const transfer of lifecycleTransfers) {
-      lifecycleFlows.set(
-        transfer.sourceId,
-        (lifecycleFlows.get(transfer.sourceId) ?? 0) - transfer.amount
-      );
-      lifecycleFlows.set(
-        transfer.destinationId,
-        (lifecycleFlows.get(transfer.destinationId) ?? 0) + transfer.amount
-      );
+      const sourceAccount = transfer.account;
+      const destAccount = accounts.find((a) => a.id === transfer.destinationId);
+      const amount = transfer.amount;
 
+      if (!destAccount) continue;
+
+      // Source account balance decreases
+      // Destination account balance increases
+      if (sourceAccount.type === 'asset') {
+        // Credit source asset: decrease
+        emitTransaction(
+          {
+            id: uuidv4(),
+            kind: 'internalTransfer',
+            legs: [
+              {
+                accountId: transfer.sourceId,
+                amount,
+                delta: 'credit',
+                label: `Lifecycle transfer: ${transfer.account.name}`,
+                sourceAccountId: transfer.sourceId,
+                sourceAccountName: transfer.account.name,
+              },
+              {
+                accountId: transfer.destinationId,
+                amount,
+                delta: 'debit',
+                label: `Lifecycle transfer: ${transfer.account.name}`,
+                sourceAccountId: transfer.sourceId,
+                sourceAccountName: transfer.account.name,
+              },
+            ],
+          },
+          newLedgerEntries,
+          context.accountResults,
+          accountValues,
+          onError
+        );
+      } else {
+        // Debit source liability: decrease
+        emitTransaction(
+          {
+            id: uuidv4(),
+            kind: 'internalTransfer',
+            legs: [
+              {
+                accountId: transfer.sourceId,
+                amount,
+                delta: 'debit',
+                label: `Lifecycle transfer: ${transfer.account.name}`,
+                sourceAccountId: transfer.sourceId,
+                sourceAccountName: transfer.account.name,
+              },
+              {
+                accountId: transfer.destinationId,
+                amount,
+                delta: 'credit',
+                label: `Lifecycle transfer: ${transfer.account.name}`,
+                sourceAccountId: transfer.sourceId,
+                sourceAccountName: transfer.account.name,
+              },
+            ],
+          },
+          newLedgerEntries,
+          context.accountResults,
+          accountValues,
+          onError
+        );
+      }
+
+      // Handle CGT for sell behavior
       if (transfer.endBehavior === 'sell') {
         const account = transfer.account;
         const costBase = account.costBase ?? account.initialValue;
@@ -184,9 +265,9 @@ export class LifecycleTransferStage implements IForecastStage {
       ...context,
       openingValues,
       lifecycleTransfers,
-      lifecycleFlows,
       pendingCgtEvents,
       liabilityPayoffs,
+      yearLedgerEntries: newLedgerEntries,
     };
   }
 }

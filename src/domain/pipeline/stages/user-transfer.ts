@@ -1,8 +1,9 @@
 /**
- * UserTransferStage - Phase 3 of the forecast pipeline.
+ * UserTransferStage - Phase 2 of the forecast pipeline.
  *
- * Applies user transfer events and super contribution events.
- * These happen AFTER lifecycle transfers, so proceeds are available.
+ * Applies user transfer events and super contribution events as double-entry
+ * ledger entries. These happen AFTER lifecycle transfers, so proceeds are
+ * available for user transfers.
  */
 
 import type {
@@ -13,12 +14,7 @@ import type {
   ForecastWarning,
 } from '../../schemas';
 
-import type {
-  ForecastContext,
-  IForecastStage,
-  SuperContributionAccountResult,
-  ContributionCapResultByPerson,
-} from './stages';
+import type { ForecastContext, IForecastStage } from './stages';
 import type { Year, Money, AccountId, PersonId } from '../../types';
 import { isAccountActive } from '../../../engine/accounts';
 import {
@@ -28,6 +24,12 @@ import {
   processPersonContributions,
   type ContributionProcessingResult,
 } from '../../../engine/superContributions';
+import {
+  emitTransaction,
+  type DoubleEntryTransaction,
+  DEFAULT_EQUITY_ACCOUNT_ID,
+} from '../../../engine/ledger';
+import { v4 as uuidv4 } from 'uuid';
 
 export class UserTransferStage implements IForecastStage {
   readonly id = 'user-transfer';
@@ -42,24 +44,35 @@ export class UserTransferStage implements IForecastStage {
       persons,
       settings,
       accountStartYears,
-      lifecycleFlows,
-      lifecycleTransfers,
       accountValues,
+      accountResults,
+      yearLedgerEntries,
+      carryForwardStates,
+      nonConcessionalCapStates,
+      superContributionsByAccount,
     } = context;
 
     const yearEvents = events.filter((e) => e.year === year);
 
-    const userTransferFlows = new Map<AccountId, Money>();
-    const superContributionFlows = new Map<AccountId, Money>();
-    const superContributionsByAccount = new Map<
-      AccountId,
-      SuperContributionAccountResult
-    >();
+    const newLedgerEntries = [...(yearLedgerEntries ?? [])];
+    const onError = (msg: string) => {
+      context.yearWarnings.push({
+        type: 'ledgerError',
+        severity: 'error',
+        message: msg,
+      });
+    };
 
     // Pre-calculate blocked/excess contributions per person
     const contributionCapResultsByPerson = new Map<
       PersonId,
-      ContributionCapResultByPerson
+      {
+        unallowedNonConcessional: Money;
+        totalRequestedNonConcessional: Money;
+        excessConcessional: Money;
+        blockedExcessConcessional: Money;
+        totalRequestedConcessional: Money;
+      }
     >();
     const contributionProcessingResults: ContributionProcessingResult[] = [];
 
@@ -74,10 +87,6 @@ export class UserTransferStage implements IForecastStage {
         persons,
         accounts
       );
-
-      // We need carry-forward and non-concessional states from context
-      const carryForwardStates = context.carryForwardStates;
-      const nonConcessionalCapStates = context.nonConcessionalCapStates;
 
       for (const person of persons) {
         const personContribs = contributionsByPerson.get(person.id);
@@ -104,10 +113,9 @@ export class UserTransferStage implements IForecastStage {
 
         contributionProcessingResults.push(result);
 
-        // Update non-concessional cap state for next year
-        newNonConcessionalCapStates.set(person.id, result.newNonConcessionalCapState);
         // Update carry-forward state for next year
         newCarryForwardStates.set(person.id, result.newCarryForwardState);
+        newNonConcessionalCapStates.set(person.id, result.newNonConcessionalCapState);
 
         const totalUnallowed =
           result.blockedNonConcessional + result.excessNonConcessional;
@@ -174,19 +182,78 @@ export class UserTransferStage implements IForecastStage {
             const openingValue = isFirstActive
               ? sourceAccount.initialValue
               : (accountValues.get(event.sourceAccountId) ?? sourceAccount.initialValue);
-            const lifecycleChange = lifecycleFlows?.get(event.sourceAccountId) ?? 0;
-            transferAmount = openingValue + lifecycleChange;
+            transferAmount = openingValue;
           }
         }
 
-        userTransferFlows.set(
-          event.sourceAccountId,
-          (userTransferFlows.get(event.sourceAccountId) ?? 0) - transferAmount
-        );
-        userTransferFlows.set(
-          event.targetAccountId,
-          (userTransferFlows.get(event.targetAccountId) ?? 0) + transferAmount
-        );
+        if (transferAmount > 0) {
+          const sourceAccount = accounts.find((a) => a.id === event.sourceAccountId);
+          const targetAccount = accounts.find((a) => a.id === event.targetAccountId);
+
+          // Source account balance decreases
+          // Destination account balance increases
+          if (sourceAccount.type === 'asset') {
+            // Credit source asset: decrease
+            emitTransaction(
+              {
+                id: uuidv4(),
+                kind: 'internalTransfer',
+                legs: [
+                  {
+                    accountId: event.sourceAccountId,
+                    amount: transferAmount,
+                    delta: 'credit',
+                    label: `Transfer: ${event.description}`,
+                    sourceAccountId: event.sourceAccountId,
+                    sourceAccountName: sourceAccount?.name,
+                  },
+                  {
+                    accountId: event.targetAccountId,
+                    amount: transferAmount,
+                    delta: 'debit',
+                    label: `Transfer: ${event.description}`,
+                    sourceAccountId: event.sourceAccountId,
+                    sourceAccountName: sourceAccount?.name,
+                  },
+                ],
+              },
+              newLedgerEntries,
+              accountResults,
+              accountValues,
+              onError
+            );
+          } else {
+            // Debit source liability: decrease
+            emitTransaction(
+              {
+                id: uuidv4(),
+                kind: 'internalTransfer',
+                legs: [
+                  {
+                    accountId: event.sourceAccountId,
+                    amount: transferAmount,
+                    delta: 'debit',
+                    label: `Transfer: ${event.description}`,
+                    sourceAccountId: event.sourceAccountId,
+                    sourceAccountName: sourceAccount?.name,
+                  },
+                  {
+                    accountId: event.targetAccountId,
+                    amount: transferAmount,
+                    delta: 'credit',
+                    label: `Transfer: ${event.description}`,
+                    sourceAccountId: event.sourceAccountId,
+                    sourceAccountName: sourceAccount?.name,
+                  },
+                ],
+              },
+              newLedgerEntries,
+              accountResults,
+              accountValues,
+              onError
+            );
+          }
+        }
       }
 
       // Handle super contribution events
@@ -221,51 +288,129 @@ export class UserTransferStage implements IForecastStage {
           }
         }
 
-        superContributionFlows.set(
-          event.targetAccountId,
-          (superContributionFlows.get(event.targetAccountId) ?? 0) + effectiveAmount
-        );
-
-        if (event.sourceAccountId) {
-          userTransferFlows.set(
-            event.sourceAccountId,
-            (userTransferFlows.get(event.sourceAccountId) ?? 0) - effectiveAmount
-          );
-        }
-
-        const existing =
-          superContributionsByAccount.get(event.targetAccountId) ?? {
-            concessional: 0,
-            nonConcessional: 0,
-            preTaxReduction: 0,
-            postTaxDeduction: 0,
-            personId: personId ?? 'unassigned',
-          };
-        if (taxCategory === 'concessional') {
-          existing.concessional += event.amount;
-          if (reducesAssessableIncome) {
-            if (source === 'salarySacrifice') {
-              existing.preTaxReduction += event.amount;
-            } else {
-              existing.postTaxDeduction += event.amount;
-            }
+        if (effectiveAmount > 0) {
+          // Track contributions by super account for tax processing
+          const existingSuper =
+            superContributionsByAccount.get(event.targetAccountId) ?? {
+              concessional: 0,
+              nonConcessional: 0,
+              preTaxReduction: 0,
+              postTaxDeduction: 0,
+              personId: personId ?? 'unassigned',
+            };
+          if (taxCategory === 'concessional') {
+            existingSuper.concessional += effectiveAmount;
+          } else {
+            existingSuper.nonConcessional += effectiveAmount;
           }
-        } else {
-          existing.nonConcessional += effectiveAmount;
+          superContributionsByAccount.set(event.targetAccountId, existingSuper);
+          if (exemptFromCap) {
+            // Cap-exempt: externalIn credit to super account, debit Retained Earnings
+            const sourceAccount = accounts.find((a) => a.id === event.sourceAccountId);
+            emitTransaction(
+              {
+                id: uuidv4(),
+                kind: 'externalIn',
+                legs: [
+                  {
+                    accountId: event.targetAccountId,
+                    amount: effectiveAmount,
+                    delta: 'debit',
+                    label: `Super contribution: ${event.description}`,
+                    sourceAccountId: event.sourceAccountId,
+                    sourceAccountName: sourceAccount?.name,
+                  },
+                  {
+                    accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                    amount: effectiveAmount,
+                    delta: 'credit',
+                    label: `Super contribution: ${event.description}`,
+                    sourceAccountId: event.sourceAccountId,
+                    sourceAccountName: sourceAccount?.name,
+                  },
+                ],
+              },
+              newLedgerEntries,
+              accountResults,
+              accountValues,
+              onError
+            );
+            } else if (event.sourceAccountId) {
+              // Internal transfer from source to super account
+              // Credit source (decrease asset), debit super (increase asset)
+              const sourceAccount = accounts.find((a) => a.id === event.sourceAccountId);
+              emitTransaction(
+                {
+                  id: uuidv4(),
+                  kind: 'internalTransfer',
+                  legs: [
+                    {
+                      accountId: event.sourceAccountId,
+                      amount: effectiveAmount,
+                      delta: 'credit',
+                      label: `Super contribution: ${event.description}`,
+                      sourceAccountId: event.sourceAccountId,
+                      sourceAccountName: sourceAccount?.name,
+                    },
+                    {
+                      accountId: event.targetAccountId,
+                      amount: effectiveAmount,
+                      delta: 'debit',
+                      label: `Super contribution: ${event.description}`,
+                      sourceAccountId: event.sourceAccountId,
+                      sourceAccountName: sourceAccount?.name,
+                    },
+                  ],
+                },
+                newLedgerEntries,
+                accountResults,
+                accountValues,
+                onError
+              );
+            } else {
+              // Non-exempt contribution without source: externalIn offset by Retained Earnings
+              emitTransaction(
+                {
+                  id: uuidv4(),
+                  kind: 'externalIn',
+                  legs: [
+                    {
+                      accountId: event.targetAccountId,
+                      amount: effectiveAmount,
+                      delta: 'debit',
+                      label: `Super contribution: ${event.description}`,
+                      sourceAccountId: undefined,
+                      sourceAccountName: undefined,
+                    },
+                    {
+                      accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                      amount: effectiveAmount,
+                      delta: 'credit',
+                      label: `Super contribution: ${event.description}`,
+                      sourceAccountId: undefined,
+                      sourceAccountName: undefined,
+                    },
+                  ],
+                },
+                newLedgerEntries,
+                accountResults,
+                accountValues,
+                onError
+              );
+            }
+          // If no source account and not exempt, contribution is blocked
         }
-        superContributionsByAccount.set(event.targetAccountId, existing);
       }
     }
 
     return {
       ...context,
-      userTransferFlows,
-      superContributionFlows,
-      superContributionsByAccount,
       contributionCapResultsByPerson,
       contributionProcessingResults,
       nonConcessionalCapStates: newNonConcessionalCapStates,
       carryForwardStates: newCarryForwardStates,
+      yearLedgerEntries: newLedgerEntries,
+      superContributionsByAccount,
     };
   }
 }

@@ -57,7 +57,7 @@ export function projectAccountValue(
   return previousValue * (1 + growthRate);
 }
 
-function calculateGrowthRate(
+export function calculateGrowthRate(
   profile: GrowthProfile,
   assumptions: ResolvedAssumptions,
   yearsSinceStart: number,

@@ -35,6 +35,27 @@ export interface LedgerEntry {
 }
 
 /**
+ * Direction of balance change for an account.
+ */
+export type FlowDirection = 'increase' | 'decrease';
+
+/**
+ * Returns the correct debit/credit delta for changing an account balance.
+ * - To INCREASE an asset: debit; to DECREASE an asset: credit
+ * - To INCREASE a liability/equity: credit; to DECREASE a liability/equity: debit
+ */
+export function deltaForAccountDirection(
+  accountType: 'asset' | 'expense' | 'liability' | 'income',
+  direction: FlowDirection,
+): 'debit' | 'credit' {
+  if (direction === 'increase') {
+    return accountType === 'asset' ? 'debit' : 'credit';
+  } else {
+    return accountType === 'asset' ? 'credit' : 'debit';
+  }
+}
+
+/**
  * A single leg of a double-entry transaction. Every transaction must have
  * exactly two legs: one debit and one credit of equal amount.
  */
@@ -148,12 +169,34 @@ export function emitLedgerEntry(
 
   accumulated.push(entry);
 
+  // Apply double-entry sign convention based on account type:
+  //   Debit to Asset:   endValue += amount  (asset increases = contribution)
+  //   Credit to Asset:  endValue -= amount  (asset decreases = withdrawal)
+  //   Debit to Liability: endValue -= amount  (liability decreases = withdrawal)
+  //   Credit to Liability: endValue += amount  (liability increases = contribution)
+  const isAsset = result.accountType === 'asset';
+  let balanceChange: number;
   if (entry.delta === 'credit') {
+    balanceChange = isAsset ? -entry.amount : entry.amount;
+  } else {
+    balanceChange = isAsset ? entry.amount : -entry.amount;
+  }
+  result.endValue += balanceChange;
+
+  // Track contributions (balance increases) and withdrawals (balance decreases)
+  if (balanceChange > 0) {
     result.contributions += entry.amount;
-    result.endValue += entry.amount;
   } else {
     result.withdrawals += entry.amount;
-    result.endValue -= entry.amount;
+  }
+
+  // Track transfers (internalTransfer movements)
+  if (entry.kind === 'internalTransfer') {
+    if (balanceChange > 0) {
+      result.transfers += entry.amount;
+    } else {
+      result.transfers -= entry.amount;
+    }
   }
 
   accountValues.set(entry.accountId, result.endValue);
@@ -162,10 +205,52 @@ export function emitLedgerEntry(
   result.cashflowDetails.push({
     description: entry.label,
     amount: entry.amount,
-    type: entry.delta === 'credit' ? 'contribution' : 'withdrawal',
+    type: balanceChange > 0 ? 'contribution' : 'withdrawal',
     sourceAccountId: entry.sourceAccountId,
     sourceAccountName: entry.sourceAccountName,
   });
+}
+
+/**
+ * Emit a ledger entry that changes an account balance by the given direction.
+ * Automatically computes the correct debit/credit based on account type.
+ */
+export function emitAccountChange(
+  accountId: string,
+  amount: number,
+  direction: FlowDirection,
+  kind: FlowKind,
+  label: string,
+  sourceAccountId?: string,
+  sourceAccountName?: string,
+  accumulated: LedgerEntry[],
+  accountResults: Map<string, AccountYearResult>,
+  accountValues: Map<string, number>,
+  onError?: (msg: string) => void,
+): void {
+  const result = accountResults.get(accountId);
+  if (!result) {
+    onError?.(`Account "${accountId}" not found for flow "${label}" [${kind}]`);
+    return;
+  }
+
+  const delta = deltaForAccountDirection(result.accountType, direction);
+
+  emitLedgerEntry(
+    {
+      accountId,
+      amount,
+      delta,
+      kind,
+      label,
+      sourceAccountId,
+      sourceAccountName,
+    },
+    accumulated,
+    accountResults,
+    accountValues,
+    onError
+  );
 }
 
 /**
@@ -225,11 +310,12 @@ export function checkConservation(
   year: number,
   tolerance = 1,
 ): ConservationResult {
-  // Transfer balance: internalTransfer credits minus debits must equal zero
+  // Transfer balance: in double-entry, every transaction has equal debits and credits.
+  // Debit = +amount in ledger, Credit = -amount in ledger. Sum should be zero.
   let transferNet = 0;
   for (const e of entries) {
     if (e.kind === 'internalTransfer') {
-      transferNet += e.delta === 'credit' ? e.amount : -e.amount;
+      transferNet += e.delta === 'debit' ? e.amount : -e.amount;
     }
   }
 
@@ -251,14 +337,16 @@ export function checkConservation(
     if (account.type === 'asset') assetGrowth += result.growth;
   }
 
+  // externalIn increases net worth, externalOut decreases net worth
   let externalIn = 0;
   let externalOut = 0;
+  // synthetic increases net worth (asset growth), decrease reduces it
   let synthetic = 0;
 
   for (const e of entries) {
     switch (e.kind) {
-      case 'externalIn':  externalIn  += e.amount; break;
-      case 'externalOut': externalOut += e.amount; break;
+      case 'externalIn':  externalIn  += e.delta === 'credit' ? e.amount : -e.amount; break;
+      case 'externalOut': externalOut += e.delta === 'debit' ? e.amount : -e.amount; break;
       case 'synthetic':   synthetic   += e.delta === 'credit' ? e.amount : -e.amount; break;
     }
   }

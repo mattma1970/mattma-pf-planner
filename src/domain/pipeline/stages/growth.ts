@@ -1,8 +1,12 @@
 /**
- * GrowthStage - Phase 4 of the forecast pipeline.
+ * GrowthStage - Phase 3 of the forecast pipeline.
  *
- * Apply growth to account balances based on settings.growthCalculationMethod.
- * Handles income, expense, asset, and liability account types differently.
+ * Applies growth profiles (fixed, CPI-linked, increasing, decreasing) to
+ * account balances. Growth is emitted as synthetic ledger entries.
+ *
+ * GrowthStage does NOT handle transfers, contributions, or withdrawals -
+ * those are handled by LifecycleTransferStage, UserTransferStage, and
+ * DerivedFlowsStage respectively.
  */
 
 import type {
@@ -15,19 +19,28 @@ import type {
   ForecastWarning,
 } from '../../schemas';
 
-import type {
-  ForecastContext,
-  IForecastStage,
-  AccountYearResult,
-} from './stages';
-import type { Year, Money, AccountId } from '../../types';
-import { isAccountActive } from '../../../engine/accounts';
-import { projectAccountValue, getAccountAssumptionForEpoch } from '../../../engine/accounts';
+import type { ForecastContext, IForecastStage } from './stages';
+import type { Year, Money, AccountId, PersonId } from '../../types';
+import {
+  isAccountActive,
+  calculateGrowthRate,
+} from '../../../engine/accounts';
+import {
+  projectAccountValue,
+  getAccountAssumptionForEpoch,
+  calculateGrowthRate,
+} from '../../../engine/accounts';
 import { resolveAssumptions } from '../../../engine/assumptions';
+import {
+  emitTransaction,
+  type DoubleEntryTransaction,
+  DEFAULT_EQUITY_ACCOUNT_ID,
+} from '../../../engine/ledger';
+import { v4 as uuidv4 } from 'uuid';
 
 export class GrowthStage implements IForecastStage {
   readonly id = 'growth';
-  readonly order = 3;
+  readonly order = 1;
   readonly enabled = true;
 
   execute(context: ForecastContext): ForecastContext {
@@ -39,18 +52,12 @@ export class GrowthStage implements IForecastStage {
       epochs,
       assumptions,
       accountValues,
-      priorYearInflows,
-      accountStartYears,
-      lifecycleTransfers,
-      lifecycleFlows,
-      userTransferFlows,
-      superContributionFlows,
       accountResults,
+      accountStartYears,
+      yearLedgerEntries,
     } = context;
 
     const sortedEpochs = [...epochs].sort((a, b) => a.order - b.order);
-
-    const yearEvents = context.events.filter((e) => e.year === year);
 
     const resolvedAssumptions = resolveAssumptions(assumptions, year, sortedEpochs);
 
@@ -79,380 +86,314 @@ export class GrowthStage implements IForecastStage {
       }
     }
 
-    const yearStartPriorInflows = new Map(priorYearInflows);
-
-    // Track per-account income for itemized tax events
-    const incomeByAccount: Array<{
-      accountId: AccountId;
-      accountName: string;
-      amount: Money;
-      fundedFromAccountId?: AccountId;
-      personId?: PersonId;
-      personName?: string;
-    }> = [];
-
-    const incomeByPerson = new Map<string, Money>();
-    const frankingCreditsByPerson = new Map<string, Money>();
-
-    let totalIncome = 0;
-    let totalExpenses = 0;
-
-    // Track liability payoffs triggered by asset sales
-    const liabilityPayoffs = context.liabilityPayoffs ?? new Map<AccountId, {
-      amount: Money;
-      fundedByAccountId: AccountId;
-      triggeredByAssetId: AccountId;
-      triggeredByAssetName: string;
-      liabilityName: string;
-    }>();
-
     for (const account of accounts) {
       const isActive = isAccountActive(account, year, persons);
       const isFirstActiveYear = accountStartYears.get(account.id) === year;
-      const isLifecycleEnding = lifecycleTransfers?.some(
-        (t) => t.sourceId === account.id
-      ) ?? false;
 
-      const openingValue = isFirstActiveYear
-        ? account.initialValue
-        : account.type === 'income'
-          ? 0
-          : (accountValues.get(account.id) ?? account.initialValue);
-
-      const lifecycleChange = lifecycleFlows?.get(account.id) ?? 0;
-      const userTransferChange = userTransferFlows?.get(account.id) ?? 0;
-      const superContributionChange = superContributionFlows?.get(account.id) ?? 0;
-
-      let growth = 0;
-      let projectedValue = openingValue;
-      let contributions = 0;
-      let withdrawals = 0;
-      let transfers = 0;
-      let endValue = openingValue;
-
-      // Track lifecycle transfers: outflows as transfers, inflows as contributions
-      const lifecycleContribution = Math.max(0, lifecycleChange);
-      if (lifecycleChange < 0) {
-        transfers = lifecycleChange;
-      } else if (lifecycleChange > 0) {
-        contributions = lifecycleChange;
+      if (isFirstActiveYear) {
+        accountStartYears.set(account.id, year);
       }
 
-      transfers += userTransferChange;
-      contributions += superContributionChange;
+      if (!isActive) {
+        const openingValue = accountValues.get(account.id) ?? account.initialValue;
 
-      if (isActive && !isLifecycleEnding) {
-        const totalTransfers =
-          lifecycleChange + userTransferChange + superContributionChange;
-        let balanceForGrowth: Money;
-
-        if (settings.growthCalculationMethod === 'averageBalance') {
-          balanceForGrowth = openingValue + 0.5 * totalTransfers;
+        if (account.endBehavior === 'hold') {
+          accountResults.set(account.id, {
+            accountId: account.id,
+            accountType: account.type,
+            year,
+            startValue: openingValue,
+            growth: 0,
+            contributions: 0,
+            withdrawals: 0,
+            transfers: 0,
+            endValue: openingValue,
+          });
+        } else if (
+          account.endBehavior === 'transfer' ||
+          account.endBehavior === 'sell'
+        ) {
+          accountResults.set(account.id, {
+            accountId: account.id,
+            accountType: account.type,
+            year,
+            startValue: openingValue,
+            growth: 0,
+            contributions: 0,
+            withdrawals: 0,
+            transfers: 0,
+            endValue: accountValues.get(account.id) ?? 0,
+          });
         } else {
-          balanceForGrowth =
-            openingValue + Math.min(0, lifecycleChange) + userTransferChange;
+          // 'zero' or default - emit double-entry to zero out
+          if (openingValue !== 0) {
+            emitTransaction(
+              {
+                id: uuidv4(),
+                kind: 'synthetic',
+                legs: [
+                  {
+                    accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                    amount: openingValue,
+                    delta: 'debit',
+                    label: `Account ended: ${account.name}`,
+                    sourceAccountId: account.id,
+                    sourceAccountName: account.name,
+                  },
+                  {
+                    accountId: account.id,
+                    amount: openingValue,
+                    delta: 'credit',
+                    label: `Account ended: ${account.name}`,
+                    sourceAccountId: account.id,
+                    sourceAccountName: account.name,
+                  },
+                ],
+              },
+              yearLedgerEntries,
+              accountResults,
+              accountValues,
+              (msg) => {
+                context.yearWarnings.push({
+                  type: 'ledgerError',
+                  severity: 'error',
+                  message: msg,
+                });
+              }
+            );
+          }
+          accountResults.set(account.id, {
+            accountId: account.id,
+            accountType: account.type,
+            year,
+            startValue: openingValue,
+            growth: 0,
+            contributions: 0,
+            withdrawals: 0,
+            transfers: 0,
+            endValue: 0,
+          });
+        }
+        continue;
+      }
+
+      const openingValue = accountValues.get(account.id) ?? account.initialValue;
+
+      // Liabilities: no growth in this stage (handled in LiabilityStage)
+      if (account.type === 'liability') {
+        accountResults.set(account.id, {
+          accountId: account.id,
+          accountType: account.type,
+          year,
+          startValue: openingValue,
+          growth: 0,
+          contributions: 0,
+          withdrawals: 0,
+          transfers: 0,
+          endValue: openingValue,
+        });
+        continue;
+      }
+
+      // Income accounts: pass-through, growth based on prior year inflows
+      if (account.type === 'income') {
+        let projectedValue = openingValue;
+        let growth = 0;
+
+        if (account.basedOnAccountId && account.basedOnPercentage !== undefined) {
+          // Derived income (e.g., employer SG from salary)
+          const refAccount = accounts.find((a) => a.id === account.basedOnAccountId);
+          if (refAccount && isAccountActive(refAccount, year, persons)) {
+            let refValue = 0;
+            if (refAccount.type === 'income') {
+              refValue = refAccount.initialValue;
+            } else {
+              refValue = accountValues.get(refAccount.id) ?? refAccount.initialValue;
+            }
+            projectedValue = refValue * account.basedOnPercentage;
+            growth = projectedValue;
+          } else {
+            projectedValue = 0;
+            growth = 0;
+          }
         }
 
-        // Apply growth based on account type
-        if (account.type === 'liability') {
-          const payoffInfo = liabilityPayoffs.get(account.id);
-          if (payoffInfo) {
-            projectedValue = openingValue;
-            endValue = openingValue;
-            growth = 0;
-          } else {
-            projectedValue = openingValue + lifecycleChange - userTransferChange;
-            growth = 0;
-          }
-        } else if (account.type === 'expense') {
-          const accountStartYear = accountStartYears.get(account.id) ?? year;
-          const yearsSinceStart = year - accountStartYear + 1;
-
-          let grownBaseValue: Money;
-          if (account.occursEveryYears) {
-            const epochGrowthOverride = getAccountAssumptionForEpoch(
-              account,
-              year,
-              sortedEpochs,
-              'growthRate'
-            );
-            grownBaseValue = projectAccountValue(
-              account,
-              year,
-              account.initialValue,
-              resolvedAssumptions,
-              yearsSinceStart,
-              epochGrowthOverride
-            );
-            const rate =
-              account.growthProfile.type === 'fixed'
-                ? epochGrowthOverride ?? account.growthProfile.rate
-                : account.growthProfile.type === 'cpiLinked'
-                  ? (epochGrowthOverride ?? account.growthProfile.value ?? 0) +
-                    resolvedAssumptions.cpi
-                  : 0;
-            grownBaseValue =
-              account.initialValue * Math.pow(1 + rate, yearsSinceStart - 1);
-          } else if (balanceForGrowth > 0) {
-            const epochGrowthOverride = getAccountAssumptionForEpoch(
-              account,
-              year,
-              sortedEpochs,
-              'growthRate'
-            );
-            grownBaseValue = projectAccountValue(
-              account,
-              year,
-              balanceForGrowth,
-              resolvedAssumptions,
-              yearsSinceStart,
-              epochGrowthOverride
-            );
-          } else {
-            grownBaseValue = balanceForGrowth;
-          }
-
-          const expenseResult = this.calculateExpenseValue(
+        if (growth !== 0) {
+          emitSyntheticGrowth(
             account,
+            growth,
             year,
-            grownBaseValue,
-            context.openingValues ?? new Map(),
-            accountStartYear,
-            accounts,
-            persons
+            yearLedgerEntries,
+            accountResults,
+            accountValues,
+            (msg) => {
+              context.yearWarnings.push({
+                type: 'ledgerError',
+                severity: 'error',
+                message: msg,
+              });
+            }
           );
+        }
 
-          projectedValue = expenseResult.value;
-          growth = projectedValue - openingValue;
-        } else if (account.type === 'income') {
-          if (account.basedOnAccountId && account.basedOnPercentage !== undefined) {
-            const refAccount = accounts.find(
-              (a) => a.id === account.basedOnAccountId
-            );
-            if (refAccount) {
-              const refAccountActive = isAccountActive(
-                refAccount,
-                year,
-                persons
-              );
-              if (!refAccountActive) {
-                projectedValue = 0;
-                growth = 0;
-              } else {
-                let refValue = 0;
-                if (refAccount.type === 'income') {
-                  const refPriorInflows =
-                    yearStartPriorInflows.get(refAccount.id) ??
-                    refAccount.initialValue;
-                  const refIsFirstActive =
-                    accountStartYears.get(refAccount.id) === year;
-                  if (refIsFirstActive) {
-                    refValue = refAccount.initialValue;
-                  } else if (refPriorInflows > 0) {
-                    const refYearsSinceStart =
-                      year - (accountStartYears.get(refAccount.id) ?? year) + 1;
-                    const refEpochGrowthOverride =
-                      getAccountAssumptionForEpoch(
-                        refAccount,
-                        year,
-                        sortedEpochs,
-                        'growthRate'
-                      );
-                    refValue = projectAccountValue(
-                      refAccount,
-                      year,
-                      refPriorInflows,
-                      resolvedAssumptions,
-                      refYearsSinceStart,
-                      refEpochGrowthOverride
-                    );
-                  }
-                } else {
-                  refValue =
-                    context.openingValues?.get(account.basedOnAccountId) ??
-                    refAccount.initialValue;
-                }
+        accountResults.set(account.id, {
+          accountId: account.id,
+          accountType: account.type,
+          year,
+          startValue: openingValue,
+          growth,
+          contributions: 0,
+          withdrawals: 0,
+          transfers: 0,
+          endValue: projectedValue,
+        });
+        continue;
+      }
 
-                projectedValue = refValue * account.basedOnPercentage;
-                growth = projectedValue;
-              }
-            } else {
-              projectedValue = 0;
-              growth = 0;
-            }
-          } else if (isFirstActiveYear) {
-            projectedValue = account.initialValue;
-            growth = 0;
-          } else {
-            const priorInflows =
-              priorYearInflows.get(account.id) ?? account.initialValue;
-            if (priorInflows > 0) {
-              const yearsSinceStart =
-                year - (accountStartYears.get(account.id) ?? year) + 1;
-              const epochGrowthOverride = getAccountAssumptionForEpoch(
-                account,
-                year,
-                sortedEpochs,
-                'growthRate'
-              );
-              projectedValue = projectAccountValue(
-                account,
-                year,
-                priorInflows,
-                resolvedAssumptions,
-                yearsSinceStart,
-                epochGrowthOverride
-              );
-              growth = projectedValue - priorInflows;
-            } else {
-              projectedValue = 0;
-              growth = 0;
-            }
-          }
-        } else if (balanceForGrowth > 0) {
-          const yearsSinceStart =
-            year - (accountStartYears.get(account.id) ?? year) + 1;
+      // Expense accounts
+      if (account.type === 'expense') {
+        const accountStartYear = accountStartYears.get(account.id) ?? year;
+        const yearsSinceStart = year - accountStartYear + 1;
+
+        let grownBaseValue: Money;
+        if (account.occursEveryYears) {
           const epochGrowthOverride = getAccountAssumptionForEpoch(
             account,
             year,
             sortedEpochs,
             'growthRate'
           );
-          projectedValue = projectAccountValue(
+          grownBaseValue = projectAccountValue(
             account,
             year,
-            balanceForGrowth,
+            account.initialValue,
             resolvedAssumptions,
             yearsSinceStart,
             epochGrowthOverride
           );
-          growth = projectedValue - balanceForGrowth;
+          const rate =
+            account.growthProfile.type === 'fixed'
+              ? epochGrowthOverride ?? account.growthProfile.rate
+              : account.growthProfile.type === 'cpiLinked'
+                ? (epochGrowthOverride ?? account.growthProfile.value ?? 0) +
+                  resolvedAssumptions.cpi
+                : 0;
+          grownBaseValue = account.initialValue * Math.pow(1 + rate, yearsSinceStart - 1);
         } else {
-          projectedValue = balanceForGrowth;
-          growth = 0;
+          const epochGrowthOverride = getAccountAssumptionForEpoch(
+            account,
+            year,
+            sortedEpochs,
+            'growthRate'
+          );
+          const rate = calculateGrowthRate(
+            account.growthProfile,
+            resolvedAssumptions,
+            yearsSinceStart,
+            epochGrowthOverride
+          );
+          grownBaseValue = openingValue * (1 + rate);
         }
 
-        // Add remaining transfer amounts not included in growth base
-        if (settings.growthCalculationMethod === 'averageBalance') {
-          projectedValue += 0.5 * totalTransfers;
-        } else {
-          projectedValue += lifecycleContribution + superContributionChange;
-        }
+        const expenseResult = calculateExpenseValue(
+          account,
+          year,
+          grownBaseValue,
+          accountValues,
+          accountStartYear,
+          accounts,
+          persons
+        );
 
-        // Process non-transfer events
-        let eventContributions = 0;
-        let eventWithdrawals = 0;
-        for (const event of yearEvents) {
-          if (event.affectedAccountId === account.id) {
-            if (event.type === 'income' || event.type === 'assetChange') {
-              eventContributions += event.amount;
-            } else if (event.type === 'expense' || event.type === 'liabilityChange') {
-              eventWithdrawals += event.amount;
+        const expenseValue = expenseResult.value;
+        const expenseGrowth = expenseValue - openingValue;
+
+        if (expenseGrowth !== 0) {
+          emitSyntheticGrowth(
+            account,
+            expenseGrowth,
+            year,
+            yearLedgerEntries,
+            accountResults,
+            accountValues,
+            (msg) => {
+              context.yearWarnings.push({
+                type: 'ledgerError',
+                severity: 'error',
+                message: msg,
+              });
             }
-          }
-        }
-        contributions += eventContributions;
-        withdrawals += eventWithdrawals;
-
-        const wasLiabilityPaidOff =
-          account.type === 'liability' && liabilityPayoffs.has(account.id);
-        if (!wasLiabilityPaidOff) {
-          endValue = projectedValue + eventContributions - eventWithdrawals;
+          );
         }
 
-        // Store derived flows for the DerivedFlowsStage
-        // We'll capture them in the context
-      } else if (isLifecycleEnding) {
-        endValue = contributions;
-        projectedValue = contributions;
-      } else if (!isActive) {
-        if (account.endBehavior === 'hold') {
-          endValue = openingValue;
-          projectedValue = openingValue;
-        } else if (
-          account.endBehavior === 'transfer' ||
-          account.endBehavior === 'sell'
-        ) {
-          endValue = openingValue + contributions;
-          projectedValue = openingValue + contributions;
-        } else {
-          endValue = 0;
-          projectedValue = 0;
-        }
-
-        if (
-          account.type === 'income' &&
-          account.depositsToAccountId &&
-          account.endBehavior === 'hold'
-        ) {
-          // Deferred ledger entry will be handled in DerivedFlowsStage
-        }
-        if (
-          account.type === 'expense' &&
-          account.fundedByAccountId &&
-          account.endBehavior === 'hold'
-        ) {
-          // Deferred ledger entry will be handled in DerivedFlowsStage
-        }
+        accountResults.set(account.id, {
+          accountId: account.id,
+          accountType: account.type,
+          year,
+          startValue: openingValue,
+          growth: expenseGrowth,
+          contributions: 0,
+          withdrawals: 0,
+          transfers: 0,
+          endValue: expenseValue,
+        });
+        continue;
       }
 
-      accountValues.set(account.id, endValue);
+      // Asset accounts: apply growth
+      if (account.type === 'asset') {
+        const epochGrowthOverride = getAccountAssumptionForEpoch(
+          account,
+          year,
+          sortedEpochs,
+          'growthRate'
+        );
+        const rate = calculateGrowthRate(
+          account.growthProfile,
+          resolvedAssumptions,
+          1,
+          epochGrowthOverride
+        );
+        const growthAmount = openingValue * rate;
 
-      if (account.type === 'income') {
-        const taxableIncome = projectedValue + contributions;
-        totalIncome += taxableIncome;
-
-        const isDerivedSuperIncome = !!account.superContributionConfig;
-        if (
-          taxableIncome > 0 &&
-          account.incomeTaxTreatment !== 'taxFree' &&
-          !isDerivedSuperIncome
-        ) {
-          const ownerPerson = account.owner
-            ? persons.find((p) => p.id === account.owner)
-            : undefined;
-          incomeByAccount.push({
-            accountId: account.id,
-            accountName: account.name,
-            amount: taxableIncome,
-            fundedFromAccountId: account.taxFundedFromAccountId,
-            personId: account.owner,
-            personName: ownerPerson?.name,
-          });
-          if (account.owner) {
-            incomeByPerson.set(
-              account.owner,
-              (incomeByPerson.get(account.owner) ?? 0) + taxableIncome
-            );
-          }
+        if (growthAmount !== 0) {
+          emitSyntheticGrowth(
+            account,
+            growthAmount,
+            year,
+            yearLedgerEntries,
+            accountResults,
+            accountValues,
+            (msg) => {
+              context.yearWarnings.push({
+                type: 'ledgerError',
+                severity: 'error',
+                message: msg,
+              });
+            }
+          );
         }
-        endValue = taxableIncome;
-        priorYearInflows.set(account.id, taxableIncome);
-      } else if (account.type === 'expense') {
-        totalExpenses += projectedValue;
-        priorYearInflows.set(account.id, projectedValue);
-      }
 
-      accountResults.set(account.id, {
-        accountId: account.id,
-        year,
-        startValue: openingValue,
-        growth,
-        contributions,
-        withdrawals,
-        transfers,
-        endValue,
-      });
+        accountResults.set(account.id, {
+          accountId: account.id,
+          accountType: account.type,
+          year,
+          startValue: openingValue,
+          growth: growthAmount,
+          contributions: 0,
+          withdrawals: 0,
+          transfers: 0,
+          endValue: openingValue + growthAmount,
+        });
+      }
     }
 
-    // Handle events without affected accounts
-    for (const event of yearEvents) {
-      if (!event.affectedAccountId && !event.sourceAccountId) {
-        if (event.type === 'income') {
-          totalIncome += event.amount;
-        } else if (event.type === 'expense') {
-          totalExpenses += event.amount;
-        }
+    // Sync accountValues from accountResults so subsequent years use the
+    // correct opening values even for accounts without ledger entries.
+    for (const account of accounts) {
+      const result = accountResults.get(account.id);
+      if (result) {
+        accountValues.set(account.id, result.endValue);
       }
     }
 
@@ -460,47 +401,118 @@ export class GrowthStage implements IForecastStage {
       ...context,
       resolvedAssumptions,
       yearWarnings,
-      incomeByAccount,
-      incomeByPerson,
-      frankingCreditsByPerson,
-      totalIncome,
-      totalExpenses,
-      liabilityPayoffs,
     };
   }
+}
 
-  private calculateExpenseValue(
-    account: Account,
-    year: Year,
-    baseValue: Money,
-    openingValues: Map<AccountId, Money>,
-    accountStartYear: Year,
-    accounts: Account[],
-    persons: Person[]
-  ): { value: Money; isPeriodicOffYear: boolean; basedOnValue?: Money } {
-    if (account.occursEveryYears) {
-      const yearsSinceStart = year - accountStartYear;
-      if (yearsSinceStart < 0 || yearsSinceStart % account.occursEveryYears !== 0) {
-        return { value: 0, isPeriodicOffYear: true };
-      }
+function calculateExpenseValue(
+  account: Account,
+  year: Year,
+  baseValue: Money,
+  accountValues: Map<AccountId, Money>,
+  accountStartYear: Year,
+  accounts: Account[],
+  persons: Person[]
+): { value: Money; isPeriodicOffYear: boolean; basedOnValue?: Money } {
+  if (account.occursEveryYears) {
+    const yearsSinceStart = year - accountStartYear;
+    if (yearsSinceStart < 0 || yearsSinceStart % account.occursEveryYears !== 0) {
+      return { value: 0, isPeriodicOffYear: true };
     }
-
-    let value = baseValue;
-    let basedOnValue: Money | undefined;
-
-    if (account.basedOnAccountId && account.basedOnPercentage !== undefined) {
-      const refAccount = accounts.find((a) => a.id === account.basedOnAccountId);
-      if (refAccount) {
-        const refAccountActive = isAccountActive(refAccount, year, persons);
-        if (!refAccountActive) {
-          return { value: 0, isPeriodicOffYear: false, basedOnValue: 0 };
-        }
-        basedOnValue =
-          openingValues.get(account.basedOnAccountId) ?? refAccount.initialValue;
-        value = basedOnValue * account.basedOnPercentage;
-      }
-    }
-
-    return { value, isPeriodicOffYear: false, basedOnValue };
   }
+
+  let value = baseValue;
+  let basedOnValue: Money | undefined;
+
+  if (account.basedOnAccountId && account.basedOnPercentage !== undefined) {
+    const refAccount = accounts.find((a) => a.id === account.basedOnAccountId);
+    if (refAccount) {
+      const refAccountActive = isAccountActive(refAccount, year, persons);
+      if (!refAccountActive) {
+        return { value: 0, isPeriodicOffYear: false, basedOnValue: 0 };
+      }
+      basedOnValue = accountValues.get(account.basedOnAccountId) ?? refAccount.initialValue;
+      value = basedOnValue * account.basedOnPercentage;
+    }
+  }
+
+  return { value, isPeriodicOffYear: false, basedOnValue };
+}
+
+function emitSyntheticGrowth(
+  account: Account,
+  amount: number,
+  year: Year,
+  yearLedgerEntries: Array<{
+    accountId: string;
+    amount: number;
+    delta: 'credit' | 'debit';
+    kind: 'externalIn' | 'externalOut' | 'synthetic' | 'internalTransfer';
+    label: string;
+    sourceAccountId?: string;
+    sourceAccountName?: string;
+  }>,
+  accountResults: Map<string, {
+    accountId: string;
+    accountType: string;
+    endValue: number;
+    startValue: number;
+    growth: number;
+    contributions: number;
+    withdrawals: number;
+    transfers: number;
+    cashflowDetails?: Array<{
+      description: string;
+      amount: number;
+      type: string;
+      sourceAccountId?: string;
+      sourceAccountName?: string;
+    }>;
+  }>,
+  accountValues: Map<string, number>,
+  onError?: (msg: string) => void,
+): void {
+  if (amount === 0) return;
+
+  const absAmount = Math.abs(amount);
+  const isIncrease = amount > 0;
+
+  // Synthetic growth increases the account balance and offsets against
+  // Retained Earnings. For assets: debit increases, credit decreases.
+  // For non-assets: credit increases, debit decreases.
+  const accountDelta = account.type === 'asset'
+    ? (isIncrease ? 'debit' : 'credit')
+    : (isIncrease ? 'credit' : 'debit');
+  const equityDelta = account.type === 'asset'
+    ? (isIncrease ? 'credit' : 'debit')
+    : (isIncrease ? 'debit' : 'credit');
+
+  emitTransaction(
+    {
+      id: uuidv4(),
+      kind: 'synthetic',
+      legs: [
+        {
+          accountId: account.id,
+          amount: absAmount,
+          delta: accountDelta,
+          label: `Growth: ${account.name}`,
+          sourceAccountId: account.id,
+          sourceAccountName: account.name,
+        },
+        {
+          accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+          amount: absAmount,
+          delta: equityDelta,
+          label: `Growth: ${account.name}`,
+          sourceAccountId: account.id,
+          sourceAccountName: account.name,
+        },
+      ],
+    },
+    yearLedgerEntries,
+    accountResults,
+    accountValues,
+    onError
+  );
 }

@@ -46,6 +46,7 @@ export type CashflowItem = z.infer<typeof CashflowItemSchema>;
 
 export const AccountYearResultSchema = z.object({
   accountId: z.string().uuid(),
+  accountType: z.enum(['income', 'expense', 'asset', 'liability']),
   year: z.number().int(),
   startValue: z.number(),
   growth: z.number(),

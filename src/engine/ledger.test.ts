@@ -3,9 +3,10 @@ import { emitLedgerEntry, applyDeferredLedger, checkConservation, type LedgerEnt
 import type { AccountYearResult } from '../schemas';
 import { createTestAccount } from '../test/fixtures';
 
-function makeResult(accountId: string, startValue: number, endValue = startValue): AccountYearResult {
+function makeResult(accountId: string, startValue: number, endValue = startValue, accountType: 'asset' | 'expense' | 'liability' | 'income' = 'asset'): AccountYearResult {
   return {
     accountId,
+    accountType,
     year: 2025,
     startValue,
     growth: 0,
@@ -18,7 +19,7 @@ function makeResult(accountId: string, startValue: number, endValue = startValue
 
 describe('ledger', () => {
   describe('emitLedgerEntry', () => {
-    it('credits the target account and records contribution', () => {
+    it('credits the target account and records withdrawal (asset decreases)', () => {
       const results = new Map([['acc-1', makeResult('acc-1', 100)]]);
       const values = new Map([['acc-1', 100]]);
       const accumulated: LedgerEntry[] = [];
@@ -28,13 +29,13 @@ describe('ledger', () => {
         accumulated, results, values,
       );
 
-      expect(results.get('acc-1')!.endValue).toBe(150);
-      expect(results.get('acc-1')!.contributions).toBe(50);
-      expect(values.get('acc-1')).toBe(150);
+      expect(results.get('acc-1')!.endValue).toBe(50);
+      expect(results.get('acc-1')!.withdrawals).toBe(50);
+      expect(values.get('acc-1')).toBe(50);
       expect(accumulated).toHaveLength(1);
     });
 
-    it('debits the target account and records withdrawal', () => {
+    it('debits the target account and records contribution (asset increases)', () => {
       const results = new Map([['acc-1', makeResult('acc-1', 100)]]);
       const values = new Map([['acc-1', 100]]);
       const accumulated: LedgerEntry[] = [];
@@ -44,8 +45,8 @@ describe('ledger', () => {
         accumulated, results, values,
       );
 
-      expect(results.get('acc-1')!.endValue).toBe(70);
-      expect(results.get('acc-1')!.withdrawals).toBe(30);
+      expect(results.get('acc-1')!.endValue).toBe(130);
+      expect(results.get('acc-1')!.contributions).toBe(30);
     });
 
     it('appends a cashflowDetail on the account result', () => {
@@ -61,7 +62,7 @@ describe('ledger', () => {
       expect(details).toHaveLength(1);
       expect(details[0].description).toBe('dividend');
       expect(details[0].amount).toBe(25);
-      expect(details[0].type).toBe('contribution');
+      expect(details[0].type).toBe('withdrawal');
       expect(details[0].sourceAccountId).toBe('src-1');
     });
 
@@ -110,8 +111,8 @@ describe('ledger', () => {
 
       applyDeferredLedger(deferred, accumulated, results, values);
 
-      expect(results.get('bank')!.endValue).toBe(1150);   // +200 −50
-      expect(results.get('super')!.endValue).toBe(600);    // +100
+      expect(results.get('bank')!.endValue).toBe(850);   // 1000 −200 +50
+      expect(results.get('super')!.endValue).toBe(400);   // 500 −100
       expect(accumulated).toHaveLength(3);
     });
 
@@ -128,7 +129,7 @@ describe('ledger', () => {
       applyDeferredLedger(deferred, accumulated, results, values, onError);
 
       expect(onError).toHaveBeenCalledOnce();
-      expect(results.get('bank')!.endValue).toBe(1200); // good entry still applied
+      expect(results.get('bank')!.endValue).toBe(800);   // 1000 −200
       expect(accumulated).toHaveLength(1);              // only valid entry recorded
     });
   });
@@ -170,7 +171,7 @@ describe('ledger', () => {
 
       const result = checkConservation(entries, results, [pension], 2025);
       expect(result.passed).toBe(false);
-      expect(result.transferImbalance).toBe(-30_000);
+      expect(result.transferImbalance).toBe(30_000);
     });
 
     it('fails when an internalTransfer credit has no matching debit', () => {
@@ -184,7 +185,7 @@ describe('ledger', () => {
 
       const result = checkConservation(entries, results, [cash], 2025);
       expect(result.passed).toBe(false);
-      expect(result.transferImbalance).toBe(30_000);
+      expect(result.transferImbalance).toBe(-30_000);
     });
 
     it('does not count externalIn/externalOut/synthetic in the transfer balance', () => {

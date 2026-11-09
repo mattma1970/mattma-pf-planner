@@ -1,9 +1,11 @@
 /**
- * DerivedFlowsStage - Phase 5 of the forecast pipeline.
+ * DerivedFlowsStage - Phase 4 of the forecast pipeline.
  *
  * Handles derived flows: income deposits, expense funding, asset returns,
- * pension drawdowns, asset funding. These are emitted as deferred ledger
- * entries and applied after all accounts are processed.
+ * pension drawdowns, asset funding. Each flow is emitted as a pair of
+ * emitAccountChange calls (one per leg) to maintain double-entry integrity.
+ * Deferred double-entry transactions are applied after all accounts are
+ * processed.
  */
 
 import type {
@@ -25,10 +27,10 @@ import { isAccountActive } from '../../../engine/accounts';
 import { getAccountAssumptionForEpoch } from '../../../engine/accounts';
 import {
   applyDeferredTransactions,
+  emitAccountChange,
   type DoubleEntryTransaction,
   DEFAULT_EQUITY_ACCOUNT_ID,
 } from '../../../engine/ledger';
-import { v4 as uuidv4 } from 'uuid';
 
 export class DerivedFlowsStage implements IForecastStage {
   readonly id = 'derived-flows';
@@ -50,12 +52,13 @@ export class DerivedFlowsStage implements IForecastStage {
       yearLedgerEntries,
       deferredLedgerEntries,
       ledgerError,
+      totalExpenses,
     } = context;
 
     const sortedEpochs = [...epochs].sort((a, b) => a.order - b.order);
     const yearEvents = context.events.filter((e) => e.year === year);
 
-    const newDeferredEntries = [...(deferredLedgerEntries ?? [])];
+    const newDeferredEntries: DoubleEntryTransaction[] = [...(deferredLedgerEntries ?? [])];
     const newLedgerEntries = [...(yearLedgerEntries ?? [])];
 
     const onError = (msg: string) => {
@@ -66,10 +69,21 @@ export class DerivedFlowsStage implements IForecastStage {
       });
     };
 
+    // Build incomeByAccount for tax processing
+    const newIncomeByAccount: Array<{
+      accountId: AccountId;
+      accountName: string;
+      amount: Money;
+      fundedFromAccountId?: AccountId;
+      personId?: PersonId;
+      personName?: string;
+    }> = [];
+
+    let newTotalExpenses = totalExpenses;
+
     for (const account of accounts) {
       const isActive = isAccountActive(account, year, persons);
-      const isFirstActiveYear =
-        context.accountStartYears.get(account.id) === year;
+      const isFirstActiveYear = context.accountStartYears.get(account.id) === year;
       const isLifecycleEnding = context.lifecycleTransfers?.some(
         (t) => t.sourceId === account.id
       ) ?? false;
@@ -83,12 +97,23 @@ export class DerivedFlowsStage implements IForecastStage {
       const result = accountResults.get(account.id);
       if (!result) continue;
 
-      // Phase 5: Derived flows
+      // Phase 4: Derived flows
       if (account.type === 'income') {
-        const totalIncomeValue = result.startValue + result.growth; // projectedValue + contributions already in endValue
-        // Use projectedValue from result - we stored it as startValue + growth
-        // Actually endValue for income = taxableIncome = projectedValue + contributions
+        const totalIncomeValue = result.startValue + result.growth;
         const projectedValue = result.endValue - result.contributions;
+
+        // Track income for tax processing
+        if (totalIncomeValue > 0) {
+          const person = account.owner ? persons.find((p) => p.id === account.owner) : undefined;
+          newIncomeByAccount.push({
+            accountId: account.id,
+            accountName: account.name,
+            amount: totalIncomeValue,
+            fundedFromAccountId: account.fundedFromAccountId,
+            personId: account.owner,
+            personName: person?.name,
+          });
+        }
 
         if (account.superContributionConfig && totalIncomeValue > 0) {
           const config = account.superContributionConfig;
@@ -124,114 +149,136 @@ export class DerivedFlowsStage implements IForecastStage {
           }
           superContributionsByAccount.set(config.targetSuperAccountId, existing);
 
-          // Double-entry: credit target super account (money arrives), credit
-          // Retained Earnings (value enters model). Both balances increase.
-          newDeferredEntries.push({
-            id: uuidv4(),
-            kind: 'externalIn',
-            legs: [
-              {
-                accountId: config.targetSuperAccountId,
-                amount: totalIncomeValue,
-                delta: 'credit',
-                label: `${config.source === 'employerSG' ? 'Employer SG' : config.source}: ${account.name}`,
-                sourceAccountId: account.id,
-                sourceAccountName: account.name,
-              },
-              {
-                accountId: DEFAULT_EQUITY_ACCOUNT_ID,
-                amount: totalIncomeValue,
-                delta: 'credit',
-                label: `${config.source === 'employerSG' ? 'Employer SG' : config.source}: ${account.name}`,
-                sourceAccountId: account.id,
-                sourceAccountName: account.name,
-              },
-            ],
-          });
+          // Double-entry: credit target super account, debit Retained Earnings
+          // Missing target super account will be reported by emitLedgerEntry via onError.
+          emitAccountChange(
+            config.targetSuperAccountId,
+            totalIncomeValue,
+            'increase',
+            'externalIn',
+            `${config.source === 'employerSG' ? 'Employer SG' : config.source}: ${account.name}`,
+            account.id,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
+          emitAccountChange(
+            DEFAULT_EQUITY_ACCOUNT_ID,
+            totalIncomeValue,
+            'decrease',
+            'externalIn',
+            `${config.source === 'employerSG' ? 'Employer SG' : config.source}: ${account.name}`,
+            account.id,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
         } else if (totalIncomeValue > 0) {
           if (account.drawnFromAccountId && account.depositsToAccountId) {
-            // Double-entry: debit drawnFrom account (cash leaves), credit
-            // depositsTo account (cash arrives). Internal transfer.
-            newDeferredEntries.push({
-              id: uuidv4(),
-              kind: 'internalTransfer',
-              legs: [
-                {
-                  accountId: account.drawnFromAccountId,
-                  amount: totalIncomeValue,
-                  delta: 'debit',
-                  label: `Drawdown source: ${account.name}`,
-                  sourceAccountId: account.id,
-                  sourceAccountName: account.name,
-                },
-                {
-                  accountId: account.depositsToAccountId,
-                  amount: totalIncomeValue,
-                  delta: 'credit',
-                  label: `Drawdown: ${account.name}`,
-                  sourceAccountId: account.id,
-                  sourceAccountName: account.name,
-                },
-              ],
-            });
+            // Double-entry: debit drawnFrom, credit depositsTo
+            // Missing accounts will be reported by emitLedgerEntry via onError.
+            emitAccountChange(
+              account.drawnFromAccountId,
+              totalIncomeValue,
+              'decrease',
+              'internalTransfer',
+              `Drawdown source: ${account.name}`,
+              account.id,
+              account.name,
+              newLedgerEntries,
+              accountResults,
+              accountValues,
+              onError
+            );
+            emitAccountChange(
+              account.depositsToAccountId,
+              totalIncomeValue,
+              'increase',
+              'internalTransfer',
+              `Drawdown: ${account.name}`,
+              account.id,
+              account.name,
+              newLedgerEntries,
+              accountResults,
+              accountValues,
+              onError
+            );
           } else if (account.depositsToAccountId) {
-            // Double-entry: credit depositsTo account (money arrives), credit
-            // Retained Earnings (value enters model).
-            newDeferredEntries.push({
-              id: uuidv4(),
-              kind: 'externalIn',
-              legs: [
-                {
-                  accountId: account.depositsToAccountId,
-                  amount: totalIncomeValue,
-                  delta: 'credit',
-                  label: `Income: ${account.name}`,
-                  sourceAccountId: account.id,
-                  sourceAccountName: account.name,
-                },
-                {
-                  accountId: DEFAULT_EQUITY_ACCOUNT_ID,
-                  amount: totalIncomeValue,
-                  delta: 'credit',
-                  label: `Income: ${account.name}`,
-                  sourceAccountId: account.id,
-                  sourceAccountName: account.name,
-                },
-              ],
-            });
+            // Double-entry: credit depositsTo, debit Retained Earnings
+            // If depositsToAccountId references a non-existent account,
+            // emitLedgerEntry will report the error via onError.
+            emitAccountChange(
+              account.depositsToAccountId,
+              totalIncomeValue,
+              'increase',
+              'externalIn',
+              `Income: ${account.name}`,
+              account.id,
+              account.name,
+              newLedgerEntries,
+              accountResults,
+              accountValues,
+              onError
+            );
+            emitAccountChange(
+              DEFAULT_EQUITY_ACCOUNT_ID,
+              totalIncomeValue,
+              'decrease',
+              'externalIn',
+              `Income: ${account.name}`,
+              account.id,
+              account.name,
+              newLedgerEntries,
+              accountResults,
+              accountValues,
+              onError
+            );
           }
         }
       }
 
+      // Track expense total for all expense accounts
+      if (account.type === 'expense') {
+        newTotalExpenses += result.endValue;
+      }
+
       if (account.type === 'expense' && account.fundedByAccountId) {
-        // Double-entry: debit fundedBy account (cash leaves), debit Retained
-        // Earnings (equity reduced by expense).
-        newDeferredEntries.push({
-          id: uuidv4(),
-          kind: 'externalOut',
-          legs: [
-            {
-              accountId: account.fundedByAccountId,
-              amount: result.endValue, // projectedValue for expense
-              delta: 'debit',
-              label: `Expense: ${account.name}`,
-              sourceAccountId: account.id,
-              sourceAccountName: account.name,
-            },
-            {
-              accountId: DEFAULT_EQUITY_ACCOUNT_ID,
-              amount: result.endValue,
-              delta: 'debit',
-              label: `Expense: ${account.name}`,
-              sourceAccountId: account.id,
-              sourceAccountName: account.name,
-            },
-          ],
-        });
+        // Double-entry: debit fundedBy (decrease asset), debit Retained Earnings (decrease equity)
+        // Missing fundedBy account will be reported by emitLedgerEntry via onError.
+        emitAccountChange(
+          account.fundedByAccountId,
+          result.endValue,
+          'decrease',
+          'externalOut',
+          `Expense: ${account.name}`,
+          account.id,
+          account.name,
+          newLedgerEntries,
+          accountResults,
+          accountValues,
+          onError
+        );
+        emitAccountChange(
+          DEFAULT_EQUITY_ACCOUNT_ID,
+          result.endValue,
+          'decrease',
+          'externalOut',
+          `Expense: ${account.name}`,
+          account.id,
+          account.name,
+          newLedgerEntries,
+          accountResults,
+          accountValues,
+          onError
+        );
       }
 
       if (account.type === 'asset' && account.incomeTargetAccountId) {
-        const balanceForGrowth = result.startValue; // Approximation
+        const balanceForGrowth = result.startValue;
         const epochReturnOverride = getAccountAssumptionForEpoch(
           account,
           year,
@@ -259,30 +306,34 @@ export class DerivedFlowsStage implements IForecastStage {
             // frankingCreditsByPerson is updated in context
           }
 
-          // Double-entry: credit incomeTarget account (value arrives), credit
-          // Retained Earnings (synthetic value created).
-          newDeferredEntries.push({
-            id: uuidv4(),
-            kind: 'synthetic',
-            legs: [
-              {
-                accountId: account.incomeTargetAccountId,
-                amount: grossedUpReturn,
-                delta: 'credit',
-                label: `Return: ${account.name}`,
-                sourceAccountId: account.id,
-                sourceAccountName: account.name,
-              },
-              {
-                accountId: DEFAULT_EQUITY_ACCOUNT_ID,
-                amount: grossedUpReturn,
-                delta: 'credit',
-                label: `Return: ${account.name}`,
-                sourceAccountId: account.id,
-                sourceAccountName: account.name,
-              },
-            ],
-          });
+          // Double-entry: credit income target, credit Retained Earnings
+          // Missing incomeTarget will be reported by emitLedgerEntry via onError.
+          emitAccountChange(
+            account.incomeTargetAccountId,
+            grossedUpReturn,
+            'increase',
+            'synthetic',
+            `Return: ${account.name}`,
+            account.id,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
+          emitAccountChange(
+            DEFAULT_EQUITY_ACCOUNT_ID,
+            grossedUpReturn,
+            'increase',
+            'synthetic',
+            `Return: ${account.name}`,
+            account.id,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
         }
       }
 
@@ -296,30 +347,34 @@ export class DerivedFlowsStage implements IForecastStage {
           fundingAmount += account.initialValue;
         }
         if (fundingAmount > 0) {
-          // Double-entry: debit fundedBy account (cash leaves), credit asset
-          // account (asset acquired). Internal transfer.
-          newDeferredEntries.push({
-            id: uuidv4(),
-            kind: 'internalTransfer',
-            legs: [
-              {
-                accountId: account.fundedByAccountId,
-                amount: fundingAmount,
-                delta: 'debit',
-                label: `Fund asset: ${account.name}`,
-                sourceAccountId: account.id,
-                sourceAccountName: account.name,
-              },
-              {
-                accountId: account.id,
-                amount: fundingAmount,
-                delta: 'credit',
-                label: `Fund asset: ${account.name}`,
-                sourceAccountId: account.fundedByAccountId,
-                sourceAccountName: 'Funding account',
-              },
-            ],
-          });
+          // Double-entry: debit fundedBy (decrease), credit asset (increase)
+          // Missing fundedBy account will be reported by emitLedgerEntry via onError.
+          emitAccountChange(
+            account.fundedByAccountId,
+            fundingAmount,
+            'decrease',
+            'internalTransfer',
+            `Fund asset: ${account.name}`,
+            account.id,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
+          emitAccountChange(
+            account.id,
+            fundingAmount,
+            'increase',
+            'internalTransfer',
+            `Fund asset: ${account.name}`,
+            account.fundedByAccountId,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
         }
       }
 
@@ -330,60 +385,66 @@ export class DerivedFlowsStage implements IForecastStage {
           account.depositsToAccountId &&
           account.endBehavior === 'hold'
         ) {
-          // Double-entry: credit depositsTo account (money arrives), credit
-          // Retained Earnings (value enters model).
-          newDeferredEntries.push({
-            id: uuidv4(),
-            kind: 'externalIn',
-            legs: [
-              {
-                accountId: account.depositsToAccountId,
-                amount: result.endValue,
-                delta: 'credit',
-                label: `Income (held): ${account.name}`,
-                sourceAccountId: account.id,
-                sourceAccountName: account.name,
-              },
-              {
-                accountId: DEFAULT_EQUITY_ACCOUNT_ID,
-                amount: result.endValue,
-                delta: 'credit',
-                label: `Income (held): ${account.name}`,
-                sourceAccountId: account.id,
-                sourceAccountName: account.name,
-              },
-            ],
-          });
+          // Missing depositsTo account will be reported by emitLedgerEntry via onError.
+          emitAccountChange(
+            account.depositsToAccountId,
+            result.endValue,
+            'increase',
+            'externalIn',
+            `Income (held): ${account.name}`,
+            account.id,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
+          emitAccountChange(
+            DEFAULT_EQUITY_ACCOUNT_ID,
+            result.endValue,
+            'decrease',
+            'externalIn',
+            `Income (held): ${account.name}`,
+            account.id,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
         }
         if (
           account.type === 'expense' &&
           account.fundedByAccountId &&
           account.endBehavior === 'hold'
         ) {
-          // Double-entry: debit fundedBy account (cash leaves), debit Retained
-          // Earnings (equity reduced by expense).
-          newDeferredEntries.push({
-            id: uuidv4(),
-            kind: 'externalOut',
-            legs: [
-              {
-                accountId: account.fundedByAccountId,
-                amount: result.endValue,
-                delta: 'debit',
-                label: `Expense (held): ${account.name}`,
-                sourceAccountId: account.id,
-                sourceAccountName: account.name,
-              },
-              {
-                accountId: DEFAULT_EQUITY_ACCOUNT_ID,
-                amount: result.endValue,
-                delta: 'debit',
-                label: `Expense (held): ${account.name}`,
-                sourceAccountId: account.id,
-                sourceAccountName: account.name,
-              },
-            ],
-          });
+          // Missing fundedBy account will be reported by emitLedgerEntry via onError.
+          emitAccountChange(
+            account.fundedByAccountId,
+            result.endValue,
+            'decrease',
+            'externalOut',
+            `Expense (held): ${account.name}`,
+            account.id,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
+          emitAccountChange(
+            DEFAULT_EQUITY_ACCOUNT_ID,
+            result.endValue,
+            'decrease',
+            'externalOut',
+            `Expense (held): ${account.name}`,
+            account.id,
+            account.name,
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
         }
       }
     }
@@ -402,6 +463,8 @@ export class DerivedFlowsStage implements IForecastStage {
       deferredLedgerEntries: newDeferredEntries,
       yearLedgerEntries: newLedgerEntries,
       superContributionsByAccount,
+      incomeByAccount: newIncomeByAccount,
+      totalExpenses: newTotalExpenses,
     };
   }
 }

@@ -49,19 +49,17 @@ export class AutoTopupStage implements IForecastStage {
       const threshold = account.autoTopup.threshold ?? 0;
 
       if (result.endValue < threshold) {
-        const sourceResult = accountResults.get(account.autoTopup.fromAccountId);
-        if (!sourceResult) continue;
+        const sourceAccount = accounts.find((a) => a.id === account.autoTopup!.fromAccountId);
+        if (!sourceAccount) continue;
 
         const targetBalance = account.autoTopup.targetBalance ?? threshold;
         const topupAmount = targetBalance - result.endValue;
 
         if (topupAmount > 0) {
-          const sourceAccount = accounts.find(
-            (a) => a.id === account.autoTopup!.fromAccountId
-          );
+          // Double-entry: debit source (decrease), credit target (increase)
+          const sourceDelta = deltaForAccount(sourceAccount, 'decrease');
+          const targetDelta = deltaForAccount(account, 'increase');
 
-          // Double-entry: debit source account (cash leaves), credit target
-          // account (cash arrives). Both legs balance; net worth unchanged.
           emitTransaction(
             {
               id: uuidv4(),
@@ -70,7 +68,7 @@ export class AutoTopupStage implements IForecastStage {
                 {
                   accountId: account.autoTopup!.fromAccountId,
                   amount: topupAmount,
-                  delta: 'debit',
+                  delta: sourceDelta,
                   label: `Auto top-up to: ${account.name}`,
                   sourceAccountId: account.id,
                   sourceAccountName: account.name,
@@ -78,10 +76,10 @@ export class AutoTopupStage implements IForecastStage {
                 {
                   accountId: account.id,
                   amount: topupAmount,
-                  delta: 'credit',
-                  label: `Auto top-up from: ${sourceAccount?.name ?? 'Unknown'}`,
+                  delta: targetDelta,
+                  label: `Auto top-up from: ${sourceAccount.name ?? 'Unknown'}`,
                   sourceAccountId: account.autoTopup!.fromAccountId,
-                  sourceAccountName: sourceAccount?.name,
+                  sourceAccountName: sourceAccount.name,
                 },
               ],
             },
@@ -91,7 +89,6 @@ export class AutoTopupStage implements IForecastStage {
             onError
           );
           result.autoTopupApplied = true;
-          sourceResult.autoTopupApplied = true;
         }
       }
     }
@@ -100,5 +97,18 @@ export class AutoTopupStage implements IForecastStage {
       ...context,
       yearLedgerEntries: newLedgerEntries,
     };
+  }
+}
+
+/**
+ * Returns the correct delta direction for changing an account balance.
+ * - To INCREASE an asset: debit; to DECREASE an asset: credit
+ * - To INCREASE a liability: credit; to DECREASE a liability: debit
+ */
+function deltaForAccount(account: Account, direction: 'increase' | 'decrease'): 'debit' | 'credit' {
+  if (direction === 'increase') {
+    return account.type === 'asset' ? 'debit' : 'credit';
+  } else {
+    return account.type === 'asset' ? 'credit' : 'debit';
   }
 }
