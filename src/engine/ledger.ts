@@ -184,15 +184,20 @@ export function emitLedgerEntry(
   result.endValue += balanceChange;
 
   // Track contributions (balance increases) and withdrawals (balance decreases)
-  if (balanceChange > 0) {
-    result.contributions += entry.amount;
-  } else {
-    result.withdrawals += entry.amount;
+  // Synthetic entries (investment growth) are not contributions/withdrawals.
+  if (entry.kind !== 'synthetic') {
+    if (balanceChange > 0) {
+      result.contributions += entry.amount;
+    } else {
+      result.withdrawals += entry.amount;
+    }
   }
 
   // Track transfers (internalTransfer movements)
+  // Based on delta direction: debit → money coming into account → +transfer
+  //                          credit → money going out of account → -transfer
   if (entry.kind === 'internalTransfer') {
-    if (balanceChange > 0) {
+    if (entry.delta === 'debit') {
       result.transfers += entry.amount;
     } else {
       result.transfers -= entry.amount;

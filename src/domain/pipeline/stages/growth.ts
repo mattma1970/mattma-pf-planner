@@ -40,7 +40,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 export class GrowthStage implements IForecastStage {
   readonly id = 'growth';
-  readonly order = 1;
+  readonly order = 3;
   readonly enabled = true;
 
   execute(context: ForecastContext): ForecastContext {
@@ -55,6 +55,7 @@ export class GrowthStage implements IForecastStage {
       accountResults,
       accountStartYears,
       yearLedgerEntries,
+      openingValues,
     } = context;
 
     const sortedEpochs = [...epochs].sort((a, b) => a.order - b.order);
@@ -88,14 +89,19 @@ export class GrowthStage implements IForecastStage {
 
     for (const account of accounts) {
       const isActive = isAccountActive(account, year, persons);
-      const isFirstActiveYear = accountStartYears.get(account.id) === year;
+      const isFirstActiveYear = !accountStartYears.has(account.id) && isActive;
 
       if (isFirstActiveYear) {
         accountStartYears.set(account.id, year);
       }
 
       if (!isActive) {
-        const openingValue = accountValues.get(account.id) ?? account.initialValue;
+        // Use startValue from accountResults (set in buildInitialContext as the
+        // true opening value), falling back to accountValues or initialValue.
+        const openingValue =
+          accountResults.get(account.id)?.startValue ??
+          accountValues.get(account.id) ??
+          account.initialValue;
 
         if (account.endBehavior === 'hold') {
           accountResults.set(account.id, {
@@ -177,7 +183,19 @@ export class GrowthStage implements IForecastStage {
         continue;
       }
 
+      // Use accountValues for opening value (carries forward balances year to year)
       const openingValue = accountValues.get(account.id) ?? account.initialValue;
+
+      // Skip growth for accounts ending this year with transfer/sell behavior -
+      // LifecycleTransferStage already handled the balance transfer.
+      const isEndingThisYear =
+        account.endCondition?.type === 'year' && account.endCondition.year === year;
+      if (
+        isEndingThisYear &&
+        (account.endBehavior === 'transfer' || account.endBehavior === 'sell')
+      ) {
+        continue;
+      }
 
       // Liabilities: no growth in this stage (handled in LiabilityStage)
       if (account.type === 'liability') {
@@ -187,10 +205,13 @@ export class GrowthStage implements IForecastStage {
           year,
           startValue: openingValue,
           growth: 0,
-          contributions: 0,
-          withdrawals: 0,
-          transfers: 0,
-          endValue: openingValue,
+          contributions:
+            accountResults.get(account.id)?.contributions ?? 0,
+          withdrawals:
+            accountResults.get(account.id)?.withdrawals ?? 0,
+          transfers:
+            accountResults.get(account.id)?.transfers ?? 0,
+          endValue: accountResults.get(account.id)?.endValue ?? openingValue,
         });
         continue;
       }
@@ -199,23 +220,36 @@ export class GrowthStage implements IForecastStage {
       if (account.type === 'income') {
         let projectedValue = openingValue;
         let growth = 0;
+        const yearsSinceStart = year - (accountStartYears.get(account.id) ?? year);
 
         if (account.basedOnAccountId && account.basedOnPercentage !== undefined) {
           // Derived income (e.g., employer SG from salary)
           const refAccount = accounts.find((a) => a.id === account.basedOnAccountId);
           if (refAccount && isAccountActive(refAccount, year, persons)) {
             let refValue = 0;
-            if (refAccount.type === 'income') {
-              refValue = refAccount.initialValue;
-            } else {
-              refValue = accountValues.get(refAccount.id) ?? refAccount.initialValue;
-            }
+            refValue = accountValues.get(refAccount.id) ?? refAccount.initialValue;
             projectedValue = refValue * account.basedOnPercentage;
             growth = projectedValue;
           } else {
             projectedValue = 0;
             growth = 0;
           }
+        } else if (yearsSinceStart >= 1) {
+          // Regular income: apply growth from second year onwards
+          const epochGrowthOverride = getAccountAssumptionForEpoch(
+            account,
+            year,
+            sortedEpochs,
+            'growthRate'
+          );
+          const rate = calculateGrowthRate(
+            account.growthProfile,
+            resolvedAssumptions,
+            1,
+            epochGrowthOverride
+          );
+          growth = openingValue * rate;
+          projectedValue = openingValue + growth;
         }
 
         if (growth !== 0) {
@@ -247,6 +281,8 @@ export class GrowthStage implements IForecastStage {
           transfers: 0,
           endValue: projectedValue,
         });
+        // Sync accountValues immediately so derived accounts can reference grown values
+        accountValues.set(account.id, projectedValue);
         continue;
       }
 
@@ -280,19 +316,24 @@ export class GrowthStage implements IForecastStage {
                 : 0;
           grownBaseValue = account.initialValue * Math.pow(1 + rate, yearsSinceStart - 1);
         } else {
-          const epochGrowthOverride = getAccountAssumptionForEpoch(
-            account,
-            year,
-            sortedEpochs,
-            'growthRate'
-          );
-          const rate = calculateGrowthRate(
-            account.growthProfile,
-            resolvedAssumptions,
-            yearsSinceStart,
-            epochGrowthOverride
-          );
-          grownBaseValue = openingValue * (1 + rate);
+          const yearsSinceStart = year - (accountStartYears.get(account.id) ?? year);
+          if (yearsSinceStart >= 1) {
+            const epochGrowthOverride = getAccountAssumptionForEpoch(
+              account,
+              year,
+              sortedEpochs,
+              'growthRate'
+            );
+            const rate = calculateGrowthRate(
+              account.growthProfile,
+              resolvedAssumptions,
+              1,
+              epochGrowthOverride
+            );
+            grownBaseValue = openingValue * (1 + rate);
+          } else {
+            grownBaseValue = openingValue;
+          }
         }
 
         const expenseResult = calculateExpenseValue(
@@ -300,6 +341,7 @@ export class GrowthStage implements IForecastStage {
           year,
           grownBaseValue,
           accountValues,
+          openingValues,
           accountStartYear,
           accounts,
           persons
@@ -354,7 +396,20 @@ export class GrowthStage implements IForecastStage {
           1,
           epochGrowthOverride
         );
-        const growthAmount = openingValue * rate;
+        // Growth base depends on calculation method:
+        //   openingBalance: growth = rate * startValue (or transfers if startValue=0)
+        //   averageBalance: growth = rate * (startValue + postTransferEndValue) / 2
+        const startValue = accountResults.get(account.id)?.startValue ?? openingValue;
+        const currentEndValue = accountResults.get(account.id)?.endValue ?? openingValue;
+        const transfersReceived = Math.max(0, accountResults.get(account.id)?.transfers ?? 0);
+        const openingBase = startValue > 0 ? startValue : transfersReceived;
+
+        let growthAmount: number;
+        if (settings.growthCalculationMethod === 'averageBalance') {
+          growthAmount = rate * (openingBase + currentEndValue) / 2;
+        } else {
+          growthAmount = rate * openingBase;
+        }
 
         if (growthAmount !== 0) {
           emitSyntheticGrowth(
@@ -380,10 +435,13 @@ export class GrowthStage implements IForecastStage {
           year,
           startValue: openingValue,
           growth: growthAmount,
-          contributions: 0,
-          withdrawals: 0,
-          transfers: 0,
-          endValue: openingValue + growthAmount,
+          contributions:
+            accountResults.get(account.id)?.contributions ?? 0,
+          withdrawals:
+            accountResults.get(account.id)?.withdrawals ?? 0,
+          transfers:
+            accountResults.get(account.id)?.transfers ?? 0,
+          endValue: accountResults.get(account.id)?.endValue ?? openingValue,
         });
       }
     }
@@ -410,6 +468,7 @@ function calculateExpenseValue(
   year: Year,
   baseValue: Money,
   accountValues: Map<AccountId, Money>,
+  openingValues: Map<AccountId, Money>,
   accountStartYear: Year,
   accounts: Account[],
   persons: Person[]
@@ -431,7 +490,10 @@ function calculateExpenseValue(
       if (!refAccountActive) {
         return { value: 0, isPeriodicOffYear: false, basedOnValue: 0 };
       }
-      basedOnValue = accountValues.get(account.basedOnAccountId) ?? refAccount.initialValue;
+      // Use opening value for based-on accounts (before growth applied)
+      basedOnValue = openingValues.get(account.basedOnAccountId) ??
+        accountValues.get(account.basedOnAccountId) ??
+        refAccount.initialValue;
       value = basedOnValue * account.basedOnPercentage;
     }
   }

@@ -104,6 +104,7 @@ export class LiabilityStage implements IForecastStage {
       }
 
       const interestAmount = effectiveBalance * interestRate;
+      const principalBalance = result.endValue; // balance BEFORE interest accrual
 
       if (interestAmount !== 0) {
         emitAccountChange(
@@ -151,13 +152,13 @@ export class LiabilityStage implements IForecastStage {
         const yearsRemaining = Math.max(1, endYear - year + 1);
 
         if (interestRate > 0 && effectiveBalance > 0) {
-          const principalToPay = result.endValue;
+          const principalToPay = principalBalance;
           const principalPaymentPerYear = principalToPay / yearsRemaining;
           paymentAmount = principalPaymentPerYear + interestAmount;
         } else if (interestRate > 0) {
-          paymentAmount = result.endValue / yearsRemaining;
+          paymentAmount = principalBalance / yearsRemaining;
         } else {
-          paymentAmount = result.endValue / yearsRemaining;
+          paymentAmount = principalBalance / yearsRemaining;
         }
       }
 

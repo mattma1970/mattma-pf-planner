@@ -138,12 +138,25 @@ function buildInitialContext(
   }
   priorYearInflows.set(equityAccountId, 0);
 
-  // Pre-populate accountResults so that ledger entries in early pipeline
-  // stages (e.g. LifecycleTransferStage) can find and modify accounts before
-  // GrowthStage creates the final per-year results.
+  // Pre-populate accountResults and openingValues so that ledger entries in
+  // early pipeline stages can find and modify accounts, and GrowthStage can
+  // reference opening balances of based-on accounts.
   const accountResultsMap = new Map<AccountId, AccountYearResult>();
+  const openingValuesMap = new Map<AccountId, Money>();
   for (const account of accounts) {
-    const openingValue = accountValues.get(account.id) ?? account.initialValue;
+    // Determine if this account has started yet (startCondition year reached)
+    const startYear = account.startCondition?.type === 'year'
+      ? account.startCondition.year
+      : year;
+    const hasStarted = year >= startYear;
+
+    // Use account.initialValue for accounts that haven't started yet, since
+    // accountValues may have been zeroed by previous years' inactive handling.
+    const accountValue = accountValues.get(account.id);
+    const openingValue = hasStarted
+      ? (accountValue !== undefined && accountValue !== 0 ? accountValue : account.initialValue)
+      : account.initialValue;
+
     accountResultsMap.set(account.id, {
       accountId: account.id,
       accountType: account.type,
@@ -155,6 +168,7 @@ function buildInitialContext(
       transfers: 0,
       endValue: openingValue,
     });
+    openingValuesMap.set(account.id, openingValue);
   }
 
   return {
@@ -172,7 +186,7 @@ function buildInitialContext(
     priorYearInflows,
     accountStartYears,
     accountResults: accountResultsMap,
-    openingValues: new Map(),
+    openingValues: openingValuesMap,
     carryForwardStates,
     nonConcessionalCapStates,
     capitalLossStates,

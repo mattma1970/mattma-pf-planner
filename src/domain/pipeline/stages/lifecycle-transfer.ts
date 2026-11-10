@@ -31,7 +31,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 export class LifecycleTransferStage implements IForecastStage {
   readonly id = 'lifecycle-transfer';
-  readonly order = 3;
+  readonly order = 1;
   readonly enabled = true;
 
   execute(context: ForecastContext): ForecastContext {

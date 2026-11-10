@@ -303,6 +303,14 @@ export class UserTransferStage implements IForecastStage {
           } else {
             existingSuper.nonConcessional += effectiveAmount;
           }
+          // Track pre/post-tax reduction for assessable income calculation
+          if (event.superContribution?.reducesAssessableIncome) {
+            if (event.superContribution.source === 'salarySacrifice') {
+              existingSuper.preTaxReduction += effectiveAmount;
+            } else {
+              existingSuper.postTaxDeduction += effectiveAmount;
+            }
+          }
           superContributionsByAccount.set(event.targetAccountId, existingSuper);
           if (exemptFromCap) {
             // Cap-exempt: externalIn credit to super account, debit Retained Earnings

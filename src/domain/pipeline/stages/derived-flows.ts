@@ -79,6 +79,8 @@ export class DerivedFlowsStage implements IForecastStage {
       personName?: string;
     }> = [];
 
+    const newIncomeByPerson = new Map<PersonId, Money>();
+
     let newTotalExpenses = totalExpenses;
 
     for (const account of accounts) {
@@ -113,6 +115,14 @@ export class DerivedFlowsStage implements IForecastStage {
             personId: account.owner,
             personName: person?.name,
           });
+
+          // Track income by person for Division 293 calculation
+          // Exclude super contribution accounts - those are super contributions,
+          // not personal income
+          if (account.owner && !account.superContributionConfig) {
+            const currentPersonIncome = newIncomeByPerson.get(account.owner) ?? 0;
+            newIncomeByPerson.set(account.owner, currentPersonIncome + totalIncomeValue);
+          }
         }
 
         if (account.superContributionConfig && totalIncomeValue > 0) {
@@ -464,6 +474,7 @@ export class DerivedFlowsStage implements IForecastStage {
       yearLedgerEntries: newLedgerEntries,
       superContributionsByAccount,
       incomeByAccount: newIncomeByAccount,
+      incomeByPerson: newIncomeByPerson,
       totalExpenses: newTotalExpenses,
     };
   }

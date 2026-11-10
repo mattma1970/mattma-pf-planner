@@ -429,7 +429,7 @@ export class TaxStage implements IForecastStage {
           const div293FundingAccount =
             accounts.find((a) => a.id === div293FundingAccountId) ?? superAccount;
 
-          // Double-entry: debit funding account (cash leaves), debit Retained
+          // Double-entry: credit funding account (cash leaves), credit Retained
           // Earnings (equity reduced by tax).
           emitTransaction(
             {
@@ -439,13 +439,13 @@ export class TaxStage implements IForecastStage {
                 {
                   accountId: div293FundingAccountId,
                   amount: div293Result.taxAmount,
-                  delta: 'debit',
+                  delta: 'credit',
                   label: 'Division 293 tax',
                 },
                 {
                   accountId: DEFAULT_EQUITY_ACCOUNT_ID,
                   amount: div293Result.taxAmount,
-                  delta: 'debit',
+                  delta: 'credit',
                   label: 'Division 293 tax',
                 },
               ],
@@ -557,7 +557,7 @@ export class TaxStage implements IForecastStage {
     // 7. Deduct tax from funding account
     for (const agg of taxAggregations) {
       if (agg.fundedFromAccountId !== 'unassigned') {
-        // Double-entry: debit funding account (cash leaves), debit Retained
+        // Double-entry: credit funding account (cash leaves), credit Retained
         // Earnings (equity reduced by tax).
         emitTransaction(
           {
@@ -567,13 +567,13 @@ export class TaxStage implements IForecastStage {
               {
                 accountId: agg.fundedFromAccountId,
                 amount: agg.calculatedTax,
-                delta: 'debit',
+                delta: 'credit',
                 label: `Tax payment (${agg.taxSchedule === 'flatRate15' ? '15% flat' : 'marginal rates'})`,
               },
               {
                 accountId: DEFAULT_EQUITY_ACCOUNT_ID,
                 amount: agg.calculatedTax,
-                delta: 'debit',
+                delta: 'credit',
                 label: `Tax payment (${agg.taxSchedule === 'flatRate15' ? '15% flat' : 'marginal rates'})`,
               },
             ],
