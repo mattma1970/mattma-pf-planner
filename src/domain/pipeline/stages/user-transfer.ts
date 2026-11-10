@@ -191,68 +191,38 @@ export class UserTransferStage implements IForecastStage {
           const targetAccount = accounts.find((a) => a.id === event.targetAccountId);
 
           // Source account balance decreases
-          // Destination account balance increases
-          if (sourceAccount.type === 'asset') {
-            // Credit source asset: decrease
-            emitTransaction(
-              {
-                id: uuidv4(),
-                kind: 'internalTransfer',
-                legs: [
-                  {
-                    accountId: event.sourceAccountId,
-                    amount: transferAmount,
-                    delta: 'credit',
-                    label: `Transfer: ${event.description}`,
-                    sourceAccountId: event.sourceAccountId,
-                    sourceAccountName: sourceAccount?.name,
-                  },
-                  {
-                    accountId: event.targetAccountId,
-                    amount: transferAmount,
-                    delta: 'debit',
-                    label: `Transfer: ${event.description}`,
-                    sourceAccountId: event.sourceAccountId,
-                    sourceAccountName: sourceAccount?.name,
-                  },
-                ],
-              },
-              newLedgerEntries,
-              accountResults,
-              accountValues,
-              onError
-            );
-          } else {
-            // Debit source liability: decrease
-            emitTransaction(
-              {
-                id: uuidv4(),
-                kind: 'internalTransfer',
-                legs: [
-                  {
-                    accountId: event.sourceAccountId,
-                    amount: transferAmount,
-                    delta: 'debit',
-                    label: `Transfer: ${event.description}`,
-                    sourceAccountId: event.sourceAccountId,
-                    sourceAccountName: sourceAccount?.name,
-                  },
-                  {
-                    accountId: event.targetAccountId,
-                    amount: transferAmount,
-                    delta: 'credit',
-                    label: `Transfer: ${event.description}`,
-                    sourceAccountId: event.sourceAccountId,
-                    sourceAccountName: sourceAccount?.name,
-                  },
-                ],
-              },
-              newLedgerEntries,
-              accountResults,
-              accountValues,
-              onError
-            );
-          }
+          // Destination account balance increases (asset) or decreases (liability paid off)
+          const sourceDelta = sourceAccount.type === 'asset' ? 'credit' : 'debit';
+          // Destination: debit increases an asset, debit decreases a liability (paid off)
+          const destDelta = 'debit';
+          emitTransaction(
+            {
+              id: uuidv4(),
+              kind: 'internalTransfer',
+              legs: [
+                {
+                  accountId: event.sourceAccountId,
+                  amount: transferAmount,
+                  delta: sourceDelta,
+                  label: `Transfer: ${event.description}`,
+                  sourceAccountId: event.sourceAccountId,
+                  sourceAccountName: sourceAccount?.name,
+                },
+                {
+                  accountId: event.targetAccountId,
+                  amount: transferAmount,
+                  delta: destDelta,
+                  label: `Transfer: ${event.description}`,
+                  sourceAccountId: event.sourceAccountId,
+                  sourceAccountName: sourceAccount?.name,
+                },
+              ],
+            },
+            newLedgerEntries,
+            accountResults,
+            accountValues,
+            onError
+          );
         }
       }
 

@@ -194,8 +194,10 @@ export function emitLedgerEntry(
   }
 
   // Track transfers (internalTransfer movements)
-  // Based on delta direction: debit → money coming into account → +transfer
-  //                          credit → money going out of account → -transfer
+  // Based on delta direction: debit → money came into account → +transfer
+  //                          credit → money went out of account → -transfer
+  // This is correct for both assets (debit=increase) and liabilities
+  // (debit=decrease=paid off=money came in to extinguish debt).
   if (entry.kind === 'internalTransfer') {
     if (entry.delta === 'debit') {
       result.transfers += entry.amount;

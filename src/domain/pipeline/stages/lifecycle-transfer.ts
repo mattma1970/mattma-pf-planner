@@ -126,68 +126,38 @@ export class LifecycleTransferStage implements IForecastStage {
       if (!destAccount) continue;
 
       // Source account balance decreases
-      // Destination account balance increases
-      if (sourceAccount.type === 'asset') {
-        // Credit source asset: decrease
-        emitTransaction(
-          {
-            id: uuidv4(),
-            kind: 'internalTransfer',
-            legs: [
-              {
-                accountId: transfer.sourceId,
-                amount,
-                delta: 'credit',
-                label: `Lifecycle transfer: ${transfer.account.name}`,
-                sourceAccountId: transfer.sourceId,
-                sourceAccountName: transfer.account.name,
-              },
-              {
-                accountId: transfer.destinationId,
-                amount,
-                delta: 'debit',
-                label: `Lifecycle transfer: ${transfer.account.name}`,
-                sourceAccountId: transfer.sourceId,
-                sourceAccountName: transfer.account.name,
-              },
-            ],
-          },
-          newLedgerEntries,
-          context.accountResults,
-          accountValues,
-          onError
-        );
-      } else {
-        // Debit source liability: decrease
-        emitTransaction(
-          {
-            id: uuidv4(),
-            kind: 'internalTransfer',
-            legs: [
-              {
-                accountId: transfer.sourceId,
-                amount,
-                delta: 'debit',
-                label: `Lifecycle transfer: ${transfer.account.name}`,
-                sourceAccountId: transfer.sourceId,
-                sourceAccountName: transfer.account.name,
-              },
-              {
-                accountId: transfer.destinationId,
-                amount,
-                delta: 'credit',
-                label: `Lifecycle transfer: ${transfer.account.name}`,
-                sourceAccountId: transfer.sourceId,
-                sourceAccountName: transfer.account.name,
-              },
-            ],
-          },
-          newLedgerEntries,
-          context.accountResults,
-          accountValues,
-          onError
-        );
-      }
+      // Destination account balance increases (asset) or decreases (liability paid off)
+      const sourceDelta = sourceAccount.type === 'asset' ? 'credit' : 'debit';
+      // Destination: debit increases an asset, debit decreases a liability (paid off)
+      const destDelta = 'debit';
+      emitTransaction(
+        {
+          id: uuidv4(),
+          kind: 'internalTransfer',
+          legs: [
+            {
+              accountId: transfer.sourceId,
+              amount,
+              delta: sourceDelta,
+              label: `Lifecycle transfer: ${transfer.account.name}`,
+              sourceAccountId: transfer.sourceId,
+              sourceAccountName: transfer.account.name,
+            },
+            {
+              accountId: transfer.destinationId,
+              amount,
+              delta: destDelta,
+              label: `Lifecycle transfer: ${transfer.account.name}`,
+              sourceAccountId: transfer.sourceId,
+              sourceAccountName: transfer.account.name,
+            },
+          ],
+        },
+        newLedgerEntries,
+        context.accountResults,
+        accountValues,
+        onError
+      );
 
       // Handle CGT for sell behavior
       if (transfer.endBehavior === 'sell') {
