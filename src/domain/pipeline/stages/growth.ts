@@ -181,7 +181,11 @@ export class GrowthStage implements IForecastStage {
       }
 
       // Use accountValues for opening value (carries forward balances year to year)
-      const openingValue = accountValues.get(account.id) ?? account.initialValue;
+      const accountValue = accountValues.get(account.id);
+      const openingValue =
+        accountValue !== undefined && accountValue !== 0
+          ? accountValue
+          : account.initialValue;
 
       // Skip growth for accounts ending this year with transfer/sell behavior -
       // LifecycleTransferStage already handled the balance transfer.
@@ -224,7 +228,19 @@ export class GrowthStage implements IForecastStage {
           const refAccount = accounts.find((a) => a.id === account.basedOnAccountId);
           if (refAccount && isAccountActive(refAccount, year, persons)) {
             let refValue = 0;
-            refValue = accountValues.get(refAccount.id) ?? refAccount.initialValue;
+            // Use the reference account's current endValue if already processed
+            // this year (accountResults is updated as we go), otherwise fall back
+            // to accountValues, then initialValue. This ensures derived income
+            // reflects user modifications to the source account made this year.
+            const refResult = accountResults.get(refAccount.id);
+            if (refResult) {
+              refValue = refResult.endValue;
+            } else {
+              const accountValue = accountValues.get(refAccount.id);
+              refValue = accountValue !== undefined && accountValue !== 0
+                ? accountValue
+                : refAccount.initialValue;
+            }
             projectedValue = refValue * account.basedOnPercentage;
             growth = projectedValue;
           } else {
@@ -338,7 +354,7 @@ export class GrowthStage implements IForecastStage {
           year,
           grownBaseValue,
           accountValues,
-          openingValues,
+          accountResults,
           accountStartYear,
           accounts,
           persons
@@ -465,7 +481,16 @@ function calculateExpenseValue(
   year: Year,
   baseValue: Money,
   accountValues: Map<AccountId, Money>,
-  openingValues: Map<AccountId, Money>,
+  accountResults: Map<AccountId, {
+    accountId: string;
+    accountType: string;
+    startValue: number;
+    endValue: number;
+    growth: number;
+    contributions: number;
+    withdrawals: number;
+    transfers: number;
+  }>,
   accountStartYear: Year,
   accounts: Account[],
   persons: Person[]
@@ -487,10 +512,19 @@ function calculateExpenseValue(
       if (!refAccountActive) {
         return { value: 0, isPeriodicOffYear: false, basedOnValue: 0 };
       }
-      // Use opening value for based-on accounts (before growth applied)
-      basedOnValue = openingValues.get(account.basedOnAccountId) ??
-        accountValues.get(account.basedOnAccountId) ??
-        refAccount.initialValue;
+      // Use the reference account's startValue (opening balance) if already
+      // processed this year, otherwise fall back to accountValues, then
+      // initialValue. Expense accounts based on asset balances should use
+      // the opening balance, not the endValue (which includes growth).
+      const refResult = accountResults.get(refAccount.id);
+      if (refResult) {
+        basedOnValue = refResult.startValue;
+      } else {
+        const accountValue = accountValues.get(refAccount.id);
+        basedOnValue = accountValue !== undefined && accountValue !== 0
+          ? accountValue
+          : refAccount.initialValue;
+      }
       value = basedOnValue * account.basedOnPercentage;
     }
   }
