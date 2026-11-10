@@ -24,11 +24,8 @@ import type { Year, Money, AccountId, PersonId } from '../../types';
 import {
   isAccountActive,
   calculateGrowthRate,
-} from '../../../engine/accounts';
-import {
   projectAccountValue,
   getAccountAssumptionForEpoch,
-  calculateGrowthRate,
 } from '../../../engine/accounts';
 import { resolveAssumptions } from '../../../engine/assumptions';
 import {
