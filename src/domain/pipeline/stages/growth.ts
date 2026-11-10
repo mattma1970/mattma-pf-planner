@@ -100,6 +100,27 @@ export class GrowthStage implements IForecastStage {
           accountValues.get(account.id) ??
           account.initialValue;
 
+        // Accounts that haven't started yet (startCondition.year > year) should
+        // keep their initial value without being zeroed out. This ensures that
+        // events occurring before the account starts are preserved and added to
+        // the initial value when the account begins.
+        if (
+          account.startCondition?.type === 'year' &&
+          year < account.startCondition.year
+        ) {
+          accountResults.set(account.id, {
+            accountId: account.id,
+            accountType: account.type,
+            year,
+            startValue: openingValue,
+            growth: 0,
+            contributions: 0,
+            withdrawals: 0,
+            transfers: 0,
+            endValue: openingValue,
+          });
+        } else 
+
         if (account.endBehavior === 'hold') {
           accountResults.set(account.id, {
             accountId: account.id,
