@@ -379,6 +379,96 @@ export class UserTransferStage implements IForecastStage {
           // If no source account and not exempt, contribution is blocked
         }
       }
+
+      // Handle asset change events (e.g., adding/removing money from an asset account)
+      if (event.type === 'assetChange' && event.affectedAccountId) {
+        const assetAccount = accounts.find((a) => a.id === event.affectedAccountId);
+        if (assetAccount && assetAccount.type === 'asset') {
+          const amount = event.amount;
+          const isIncrease = amount > 0;
+          const absAmount = Math.abs(amount);
+
+          if (absAmount > 0) {
+            const kind: 'externalIn' | 'externalOut' = isIncrease ? 'externalIn' : 'externalOut';
+            const accountDelta = isIncrease ? 'debit' : 'credit';
+            const equityDelta = isIncrease ? 'credit' : 'debit';
+
+            emitTransaction(
+              {
+                id: uuidv4(),
+                kind,
+                legs: [
+                  {
+                    accountId: event.affectedAccountId,
+                    amount: absAmount,
+                    delta: accountDelta,
+                    label: `Asset change: ${event.description}`,
+                    sourceAccountId: event.sourceAccountId,
+                    sourceAccountName: event.sourceAccountName,
+                  },
+                  {
+                    accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                    amount: absAmount,
+                    delta: equityDelta,
+                    label: `Asset change: ${event.description}`,
+                    sourceAccountId: event.sourceAccountId,
+                    sourceAccountName: event.sourceAccountName,
+                  },
+                ],
+              },
+              newLedgerEntries,
+              accountResults,
+              accountValues,
+              onError
+            );
+          }
+        }
+      }
+
+      // Handle liability change events (e.g., adding/removing debt)
+      if (event.type === 'liabilityChange' && event.affectedAccountId) {
+        const liabilityAccount = accounts.find((a) => a.id === event.affectedAccountId);
+        if (liabilityAccount && liabilityAccount.type === 'liability') {
+          const amount = event.amount;
+          const isIncrease = amount > 0;
+          const absAmount = Math.abs(amount);
+
+          if (absAmount > 0) {
+            const kind: 'externalIn' | 'externalOut' = isIncrease ? 'externalIn' : 'externalOut';
+            const accountDelta = isIncrease ? 'credit' : 'debit';
+            const equityDelta = isIncrease ? 'debit' : 'credit';
+
+            emitTransaction(
+              {
+                id: uuidv4(),
+                kind,
+                legs: [
+                  {
+                    accountId: event.affectedAccountId,
+                    amount: absAmount,
+                    delta: accountDelta,
+                    label: `Liability change: ${event.description}`,
+                    sourceAccountId: event.sourceAccountId,
+                    sourceAccountName: event.sourceAccountName,
+                  },
+                  {
+                    accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                    amount: absAmount,
+                    delta: equityDelta,
+                    label: `Liability change: ${event.description}`,
+                    sourceAccountId: event.sourceAccountId,
+                    sourceAccountName: event.sourceAccountName,
+                  },
+                ],
+              },
+              newLedgerEntries,
+              accountResults,
+              accountValues,
+              onError
+            );
+          }
+        }
+      }
     }
 
     return {
