@@ -3544,3 +3544,147 @@ describe('calculateForecast', () => {
     });
   });
 });
+
+describe('zero-balance accounts must not resurrect initialValue', () => {
+  const defaultAssumptions: Assumptions = {
+    cpi: { baseValue: 0.03 },
+  };
+
+  const defaultEpochs: Epoch[] = [
+    {
+      id: 'epoch-2222-1111-1111-111111111111',
+      name: 'Default',
+      startYear: 2020,
+      endYear: 2100,
+      order: 0,
+    },
+  ];
+
+  it('keeps zero opening balance for an account after it is sold', () => {
+    const house = createTestAccount({
+      id: 'bbbb1111-1111-1111-1111-111111111111',
+      name: 'House',
+      type: 'asset',
+      initialValue: 1500000,
+      growthProfile: { type: 'fixed', rate: 0.03 },
+      endCondition: { type: 'year', year: 2027 },
+      endBehavior: 'sell',
+      transferToAccountId: 'bbbb2222-2222-2222-2222-222222222222',
+    });
+    const cash = createTestAccount({
+      id: 'bbbb2222-2222-2222-2222-222222222222',
+      name: 'Cash',
+      type: 'asset',
+      initialValue: 100000,
+      growthProfile: { type: 'fixed', rate: 0.02 },
+    });
+
+    const result = calculateForecast({
+      accounts: [house, cash],
+      assumptions: defaultAssumptions,
+      epochs: defaultEpochs,
+      events: [],
+      persons: [],
+      settings: { ...defaultSettings },
+      startYear: 2025,
+      endYear: 2029,
+    });
+
+    // Sale year: opening balance is intact, closing is zero, proceeds land in cash
+    const saleYear = result.years.find((y) => y.year === 2027)!;
+    const houseSale = saleYear.accounts.find((a) => a.accountId === house.id)!;
+    const cashSale = saleYear.accounts.find((a) => a.accountId === cash.id)!;
+    expect(houseSale.endValue).toBe(0);
+    expect(cashSale.contributions).toBe(houseSale.startValue);
+
+    // After the sale: opening balance must be 0, not the resurrected initialValue
+    for (const y of result.years.filter((y) => y.year > 2027)) {
+      const houseAfter = y.accounts.find((a) => a.accountId === house.id)!;
+      expect(houseAfter.startValue).toBe(0);
+      expect(houseAfter.endValue).toBe(0);
+    }
+  });
+
+  it('keeps zero opening balance for an active account drained to zero by an event', () => {
+    const bank = createTestAccount({
+      id: 'bbbb3333-1111-1111-1111-111111111111',
+      name: 'Bank',
+      type: 'asset',
+      initialValue: 100000,
+      growthProfile: { type: 'fixed', rate: 0.0 },
+    });
+
+    const drainEvent: Event = {
+      id: 'eeee3333-1111-1111-1111-111111111111',
+      year: 2026,
+      type: 'assetChange',
+      description: 'Drain bank account',
+      amount: -100000,
+      affectedAccountId: 'bbbb3333-1111-1111-1111-111111111111',
+    };
+
+    const result = calculateForecast({
+      accounts: [bank],
+      assumptions: defaultAssumptions,
+      epochs: defaultEpochs,
+      events: [drainEvent],
+      persons: [],
+      settings: { ...defaultSettings },
+      startYear: 2025,
+      endYear: 2028,
+    });
+
+    const drainedYear = result.years.find((y) => y.year === 2026)!;
+    expect(drainedYear.accounts.find((a) => a.accountId === bank.id)!.endValue).toBe(0);
+
+    // Drained account must stay at zero — initialValue must not resurrect
+    for (const y of result.years.filter((y) => y.year > 2026)) {
+      const bankAfter = y.accounts.find((a) => a.accountId === bank.id)!;
+      expect(bankAfter.startValue).toBe(0);
+      expect(bankAfter.endValue).toBe(0);
+    }
+  });
+
+  it('purchase event on a not-yet-started account with zero opening value applies once', () => {
+    const property = createTestAccount({
+      id: 'bbbb4444-1111-1111-1111-111111111111',
+      name: 'Property',
+      type: 'asset',
+      initialValue: 0,
+      growthProfile: { type: 'fixed', rate: 0.03 },
+      startCondition: { type: 'year', year: 2027 },
+    });
+
+    const purchaseEvent: Event = {
+      id: 'eeee4444-1111-1111-1111-111111111111',
+      year: 2027,
+      type: 'assetChange',
+      description: 'Purchase property',
+      amount: 1800000,
+      affectedAccountId: 'bbbb4444-1111-1111-1111-111111111111',
+    };
+
+    const result = calculateForecast({
+      accounts: [property],
+      assumptions: defaultAssumptions,
+      epochs: defaultEpochs,
+      events: [purchaseEvent],
+      persons: [],
+      settings: { ...defaultSettings },
+      startYear: 2026,
+      endYear: 2029,
+    });
+
+    // Before start: zero (account does not exist yet)
+    const beforeYear = result.years.find((y) => y.year === 2026)!;
+    expect(beforeYear.accounts.find((a) => a.accountId === property.id)!.endValue).toBe(0);
+
+    // Purchase year: exactly the event amount, applied once
+    const purchaseYear = result.years.find((y) => y.year === 2027)!;
+    expect(purchaseYear.accounts.find((a) => a.accountId === property.id)!.endValue).toBe(1800000);
+
+    // Carried forward with growth applied from the following year
+    const nextYear = result.years.find((y) => y.year === 2028)!;
+    expect(nextYear.accounts.find((a) => a.accountId === property.id)!.startValue).toBe(1800000);
+  });
+});

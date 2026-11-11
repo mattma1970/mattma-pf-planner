@@ -100,10 +100,10 @@ export class GrowthStage implements IForecastStage {
           accountValues.get(account.id) ??
           account.initialValue;
 
-        // Accounts that haven't started yet (startCondition.year > year) should
-        // keep their initial value without being zeroed out. This ensures that
-        // events occurring before the account starts are preserved and added to
-        // the initial value when the account begins.
+        // Accounts that haven't started yet (startCondition.year > year) carry
+        // their balance forward unchanged. The balance is zero until the start
+        // date, but any events applied in pre-start years are preserved rather
+        // than being zeroed out with the end-of-life behavior.
         if (
           account.startCondition?.type === 'year' &&
           year < account.startCondition.year
@@ -201,12 +201,16 @@ export class GrowthStage implements IForecastStage {
         continue;
       }
 
-      // Use accountValues for opening value (carries forward balances year to year)
+      // Use accountValues for opening value (carries forward balances year to year).
+      // First active year: fall back to initialValue when no balance has been
+      // carried in. Later active years: a zero balance is legitimate (account
+      // was drained/withdrawn to zero) — do not resurrect the initial value.
       const accountValue = accountValues.get(account.id);
-      const openingValue =
-        accountValue !== undefined && accountValue !== 0
-          ? accountValue
-          : account.initialValue;
+      const openingValue = isFirstActiveYear
+        ? (accountValue !== undefined && accountValue !== 0
+            ? accountValue
+            : account.initialValue)
+        : (accountValue !== undefined ? accountValue : account.initialValue);
 
       // Skip growth for accounts ending this year with transfer/sell behavior -
       // LifecycleTransferStage already handled the balance transfer.

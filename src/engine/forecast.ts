@@ -150,12 +150,19 @@ function buildInitialContext(
       : year;
     const hasStarted = year >= startYear;
 
-    // Use account.initialValue for accounts that haven't started yet, since
-    // accountValues may have been zeroed by previous years' inactive handling.
+    // Accounts that have not started yet (startCondition year in the future) do
+    // not exist in the forecast: their balance is zero until the start date.
+    // Any balance carried in accountValues comes from events applied in earlier
+    // pre-start years and is preserved (not reset to initialValue).
     const accountValue = accountValues.get(account.id);
+    const wasActiveBefore = accountStartYears.has(account.id);
     const openingValue = hasStarted
-      ? (accountValue !== undefined && accountValue !== 0 ? accountValue : account.initialValue)
-      : account.initialValue;
+      ? (accountValue !== undefined && accountValue !== 0
+          ? accountValue
+          : wasActiveBefore
+            ? (accountValue ?? 0)
+            : account.initialValue)
+      : (accountValue ?? 0);
 
     accountResultsMap.set(account.id, {
       accountId: account.id,
