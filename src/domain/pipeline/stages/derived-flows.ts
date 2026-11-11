@@ -53,6 +53,7 @@ export class DerivedFlowsStage implements IForecastStage {
       deferredLedgerEntries,
       ledgerError,
       totalExpenses,
+      totalIncome,
     } = context;
 
     const sortedEpochs = [...epochs].sort((a, b) => a.order - b.order);
@@ -82,6 +83,7 @@ export class DerivedFlowsStage implements IForecastStage {
     const newIncomeByPerson = new Map<PersonId, Money>();
 
     let newTotalExpenses = totalExpenses;
+    let newTotalIncome = totalIncome;
 
     for (const account of accounts) {
       const isActive = isAccountActive(account, year, persons);
@@ -103,6 +105,8 @@ export class DerivedFlowsStage implements IForecastStage {
       if (account.type === 'income') {
         const totalIncomeValue = result.startValue + result.growth;
         const projectedValue = result.endValue - result.contributions;
+
+        newTotalIncome += totalIncomeValue;
 
         // Track income for tax processing
         if (totalIncomeValue > 0) {
@@ -476,6 +480,7 @@ export class DerivedFlowsStage implements IForecastStage {
       incomeByAccount: newIncomeByAccount,
       incomeByPerson: newIncomeByPerson,
       totalExpenses: newTotalExpenses,
+      totalIncome: newTotalIncome,
     };
   }
 }
