@@ -25,8 +25,10 @@ import {
   type ContributionProcessingResult,
 } from '../../../engine/superContributions';
 import {
+  emitAccountChange,
   emitTransaction,
   type DoubleEntryTransaction,
+  type FlowDirection,
   DEFAULT_EQUITY_ACCOUNT_ID,
 } from '../../../engine/ledger';
 import { v4 as uuidv4 } from 'uuid';
@@ -75,6 +77,10 @@ export class UserTransferStage implements IForecastStage {
       }
     >();
     const contributionProcessingResults: ContributionProcessingResult[] = [];
+
+    // Contributions already applied directly by user events (assetChange);
+    // consumed by DerivedFlowsStage so the "Fund asset" flow does not re-fund them.
+    const newUserTransferFlows = new Map<AccountId, Money>(context.userTransferFlows ?? []);
 
     // Carry forward non-concessional cap state
     const newNonConcessionalCapStates = new Map(context.nonConcessionalCapStates);
@@ -389,37 +395,77 @@ export class UserTransferStage implements IForecastStage {
           const absAmount = Math.abs(amount);
 
           if (absAmount > 0) {
-            const kind: 'externalIn' | 'externalOut' = isIncrease ? 'externalIn' : 'externalOut';
-            const accountDelta = isIncrease ? 'debit' : 'credit';
-            const equityDelta = isIncrease ? 'credit' : 'debit';
+            if (assetAccount.fundedByAccountId) {
+              // Asset is funded by another account (e.g. bank pays for the
+              // purchase): emit an internal transfer from the funding account
+              // rather than money appearing externally. This keeps the funding
+              // account's balance consistent with the asset change.
+              emitAccountChange(
+                assetAccount.fundedByAccountId,
+                absAmount,
+                isIncrease ? 'decrease' : 'increase',
+                'internalTransfer',
+                `Asset change: ${event.description}`,
+                assetAccount.id,
+                assetAccount.name,
+                newLedgerEntries,
+                accountResults,
+                accountValues,
+                onError
+              );
+              emitAccountChange(
+                assetAccount.id,
+                absAmount,
+                isIncrease ? 'increase' : 'decrease',
+                'internalTransfer',
+                `Asset change: ${event.description}`,
+                assetAccount.fundedByAccountId,
+                assetAccount.name,
+                newLedgerEntries,
+                accountResults,
+                accountValues,
+                onError
+              );
+            } else {
+              const kind: 'externalIn' | 'externalOut' = isIncrease ? 'externalIn' : 'externalOut';
+              const accountDelta = isIncrease ? 'debit' : 'credit';
+              const equityDelta = isIncrease ? 'credit' : 'debit';
 
-            emitTransaction(
-              {
-                id: uuidv4(),
-                kind,
-                legs: [
-                  {
-                    accountId: event.affectedAccountId,
-                    amount: absAmount,
-                    delta: accountDelta,
-                    label: `Asset change: ${event.description}`,
-                    sourceAccountId: event.sourceAccountId,
-                    sourceAccountName: event.sourceAccountName,
-                  },
-                  {
-                    accountId: DEFAULT_EQUITY_ACCOUNT_ID,
-                    amount: absAmount,
-                    delta: equityDelta,
-                    label: `Asset change: ${event.description}`,
-                    sourceAccountId: event.sourceAccountId,
-                    sourceAccountName: event.sourceAccountName,
-                  },
-                ],
-              },
-              newLedgerEntries,
-              accountResults,
-              accountValues,
-              onError
+              emitTransaction(
+                {
+                  id: uuidv4(),
+                  kind,
+                  legs: [
+                    {
+                      accountId: event.affectedAccountId,
+                      amount: absAmount,
+                      delta: accountDelta,
+                      label: `Asset change: ${event.description}`,
+                      sourceAccountId: event.sourceAccountId,
+                      sourceAccountName: event.sourceAccountName,
+                    },
+                    {
+                      accountId: DEFAULT_EQUITY_ACCOUNT_ID,
+                      amount: absAmount,
+                      delta: equityDelta,
+                      label: `Asset change: ${event.description}`,
+                      sourceAccountId: event.sourceAccountId,
+                      sourceAccountName: event.sourceAccountName,
+                    },
+                  ],
+                },
+                newLedgerEntries,
+                accountResults,
+                accountValues,
+                onError
+              );
+            }
+
+            // Record that this contribution was already applied directly, so
+            // DerivedFlowsStage's "Fund asset" flow does not re-fund it.
+            newUserTransferFlows.set(
+              assetAccount.id,
+              (newUserTransferFlows.get(assetAccount.id) ?? 0) + absAmount
             );
           }
         }
@@ -479,6 +525,7 @@ export class UserTransferStage implements IForecastStage {
       carryForwardStates: newCarryForwardStates,
       yearLedgerEntries: newLedgerEntries,
       superContributionsByAccount,
+      userTransferFlows: newUserTransferFlows,
     };
   }
 }

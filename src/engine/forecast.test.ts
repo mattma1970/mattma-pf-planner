@@ -3688,3 +3688,110 @@ describe('zero-balance accounts must not resurrect initialValue', () => {
     expect(nextYear.accounts.find((a) => a.accountId === property.id)!.startValue).toBe(1800000);
   });
 });
+
+describe('assetChange events on funded assets', () => {
+  const defaultAssumptions: Assumptions = {
+    cpi: { baseValue: 0.03 },
+  };
+
+  const defaultEpochs: Epoch[] = [
+    {
+      id: 'epoch-3333-1111-1111-111111111111',
+      name: 'Default',
+      startYear: 2020,
+      endYear: 2100,
+      order: 0,
+    },
+  ];
+
+  it('pulls the funding from the fundedBy account and applies it exactly once', () => {
+    const bank = createTestAccount({
+      id: 'cccc2222-2222-2222-2222-222222222222',
+      name: 'Bank',
+      type: 'asset',
+      initialValue: 3000000,
+      growthProfile: { type: 'fixed', rate: 0 },
+    });
+    const property = createTestAccount({
+      id: 'cccc1111-1111-1111-1111-111111111111',
+      name: 'Property',
+      type: 'asset',
+      initialValue: 0,
+      growthProfile: { type: 'fixed', rate: 0 },
+      startCondition: { type: 'year', year: 2027 },
+      fundedByAccountId: 'cccc2222-2222-2222-2222-222222222222',
+    });
+
+    const purchaseEvent: Event = {
+      id: 'eeee5555-1111-1111-1111-111111111111',
+      year: 2027,
+      type: 'assetChange',
+      description: 'Buy property',
+      amount: 1800000,
+      affectedAccountId: 'cccc1111-1111-1111-1111-111111111111',
+    };
+
+    const result = calculateForecast({
+      accounts: [bank, property],
+      assumptions: defaultAssumptions,
+      epochs: defaultEpochs,
+      events: [purchaseEvent],
+      persons: [],
+      settings: { ...defaultSettings },
+      startYear: 2026,
+      endYear: 2028,
+    });
+
+    const purchaseYear = result.years.find((y) => y.year === 2027)!;
+    const propertyResult = purchaseYear.accounts.find((a) => a.accountId === property.id)!;
+    const bankResult = purchaseYear.accounts.find((a) => a.accountId === bank.id)!;
+
+    // Asset receives the event amount exactly once (no "Fund asset" double-credit)
+    expect(propertyResult.endValue).toBe(1800000);
+    expect(propertyResult.contributions).toBe(1800000);
+    // Funding bank pays exactly once
+    expect(bankResult.endValue).toBe(3000000 - 1800000);
+  });
+
+  it('leaves other accounts untouched for assets without a fundedBy account', () => {
+    const bank = createTestAccount({
+      id: 'cccc3333-2222-2222-2222-222222222222',
+      name: 'Bank',
+      type: 'asset',
+      initialValue: 3000000,
+      growthProfile: { type: 'fixed', rate: 0 },
+    });
+    const shares = createTestAccount({
+      id: 'cccc3333-1111-1111-1111-111111111111',
+      name: 'Shares',
+      type: 'asset',
+      initialValue: 0,
+      growthProfile: { type: 'fixed', rate: 0 },
+    });
+
+    const giftEvent: Event = {
+      id: 'eeee5555-2222-2222-2222-222222222222',
+      year: 2027,
+      type: 'assetChange',
+      description: 'Gift of shares',
+      amount: 100000,
+      affectedAccountId: 'cccc3333-1111-1111-1111-111111111111',
+    };
+
+    const result = calculateForecast({
+      accounts: [bank, shares],
+      assumptions: defaultAssumptions,
+      epochs: defaultEpochs,
+      events: [giftEvent],
+      persons: [],
+      settings: { ...defaultSettings },
+      startYear: 2026,
+      endYear: 2028,
+    });
+
+    const purchaseYear = result.years.find((y) => y.year === 2027)!;
+    expect(purchaseYear.accounts.find((a) => a.accountId === shares.id)!.endValue).toBe(100000);
+    // Bank untouched — external money (Retained Earnings offset)
+    expect(purchaseYear.accounts.find((a) => a.accountId === bank.id)!.endValue).toBe(3000000);
+  });
+});

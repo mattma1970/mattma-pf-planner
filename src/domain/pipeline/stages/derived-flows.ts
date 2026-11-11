@@ -352,10 +352,13 @@ export class DerivedFlowsStage implements IForecastStage {
       }
 
       if (account.type === 'asset' && account.fundedByAccountId) {
+        // userTransferFlows: contributions already applied directly by user
+        // assetChange events in UserTransferStage — must not be re-funded here.
         const userContributions =
           result.contributions -
           Math.max(0, context.lifecycleFlows?.get(account.id) ?? 0) -
-          (context.superContributionFlows?.get(account.id) ?? 0);
+          (context.superContributionFlows?.get(account.id) ?? 0) -
+          (context.userTransferFlows?.get(account.id) ?? 0);
         let fundingAmount = userContributions - result.withdrawals;
         if (isFirstActiveYear) {
           fundingAmount += account.initialValue;
